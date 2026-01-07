@@ -60,16 +60,31 @@ fn main() {
     bind_gen(&manifest_dir_path, &mnn_source_dir, &dst, &os, &arch);
 }
 
+fn is_valid_mnn_dir(p: &PathBuf) -> bool {
+    p.exists() && p.is_dir() && p.join("CMakeLists.txt").exists()
+}
+
+fn dir_exists_and_nonempty(p: &PathBuf) -> bool {
+    if !p.exists() || !p.is_dir() {
+        return false;
+    }
+    match fs::read_dir(p) {
+        Ok(mut it) => it.next().is_some(),
+        Err(_) => false,
+    }
+}
+
+
 /// Get MNN source code directory
 /// Priority:
 /// 1. Environment variable MNN_SOURCE_DIR
 /// 2. Local 3rd_party/MNN directory
 /// 3. Clone from GitHub
 fn get_mnn_source(manifest_dir: &PathBuf) -> PathBuf {
-    // Check environment variable first
+    // 1) Check environment variable first
     if let Ok(mnn_dir) = env::var("MNN_SOURCE_DIR") {
         let mnn_path = PathBuf::from(mnn_dir);
-        if mnn_path.exists() && mnn_path.join("CMakeLists.txt").exists() {
+        if is_valid_mnn_dir(&mnn_path) {
             println!(
                 "cargo:warning=Using MNN source from MNN_SOURCE_DIR: {}",
                 mnn_path.display()
@@ -83,17 +98,35 @@ fn get_mnn_source(manifest_dir: &PathBuf) -> PathBuf {
         }
     }
 
-    // Check local 3rd_party/MNN
+    // 2) local third_party/MNN
     let local_mnn = manifest_dir.join("3rd_party/MNN");
-    if local_mnn.exists() && local_mnn.join("CMakeLists.txt").exists() {
-        println!(
-            "cargo:warning=Using local MNN source: {}",
-            local_mnn.display()
-        );
+    if is_valid_mnn_dir(&local_mnn) {
+        println!("cargo:warning=Using local MNN source: {}", local_mnn.display());
         return local_mnn;
     }
 
-    // Clone from GitHub
+    // 3) If local_mnn exists but invalid, remove it (fix your current error)
+    //    This is the key change: make clone step idempotent.
+    if dir_exists_and_nonempty(&local_mnn) {
+        println!(
+            "cargo:warning=Found existing but invalid MNN dir (missing CMakeLists.txt). Removing: {}",
+            local_mnn.display()
+        );
+        fs::remove_dir_all(&local_mnn)
+            .expect("Failed to remove existing invalid 3rd_party/MNN directory");
+    } else if local_mnn.exists() {
+        // exists but empty or weird - remove as well
+        let _ = fs::remove_dir_all(&local_mnn);
+    }
+
+    // 4) clone
+    if env::var("MNN_NO_NETWORK").is_ok() {
+        panic!(
+            "MNN source not found locally and MNN_NO_NETWORK is set. \
+            Provide MNN_SOURCE_DIR or add 3rd_party/MNN with CMakeLists.txt."
+        );
+    }
+
     println!("cargo:warning=MNN source not found, cloning from GitHub...");
     let third_party_dir = manifest_dir.join("3rd_party");
     fs::create_dir_all(&third_party_dir).expect("Failed to create 3rd_party directory");
@@ -109,19 +142,30 @@ fn get_mnn_source(manifest_dir: &PathBuf) -> PathBuf {
         .expect("Failed to execute git clone command. Make sure git is installed.");
 
     if !status.success() {
-        panic!("Failed to clone MNN from GitHub");
+        panic!(
+            "Failed to clone MNN from GitHub. If you want to avoid network cloning, set MNN_SOURCE_DIR to a local MNN checkout."
+        );
     }
 
-    if !local_mnn.join("CMakeLists.txt").exists() {
+    let status = Command::new("git")
+    .current_dir(&local_mnn)
+    .args(&["checkout", "9bd8302"])
+    .status()
+    .expect("Failed to checkout MNN commit 9bd8302");
+
+    if !status.success() {
+        panic!("Failed to checkout MNN commit 9bd8302");
+    }
+
+
+    if !is_valid_mnn_dir(&local_mnn) {
         panic!("MNN cloned but CMakeLists.txt not found");
     }
 
-    println!(
-        "cargo:warning=Successfully cloned MNN to: {}",
-        local_mnn.display()
-    );
+    println!("cargo:warning=Successfully cloned MNN to: {}", local_mnn.display());
     local_mnn
 }
+
 
 fn build_mnn_with_cmake(
     mnn_source_dir: &PathBuf,
@@ -263,7 +307,10 @@ fn build_mnn_with_cmake(
         config.define("MNN_VULKAN", "ON");
     }
 
-    println!("cargo:rerun-if-changed=MNN/CMakeLists.txt");
+    println!("cargo:rerun-if-env-changed=MNN_SOURCE_DIR");
+    println!("cargo:rerun-if-env-changed=MNN_NO_NETWORK");
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=3rd_party/MNN/CMakeLists.txt");
 
     config.build()
 }
