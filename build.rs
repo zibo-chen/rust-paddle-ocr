@@ -257,16 +257,31 @@ fn get_prebuilt_asset_name(os: &str, arch: &str) -> Option<String> {
 /// Download and extract prebuilt MNN library from GitHub releases.
 /// Returns the path to the extracted directory containing lib/ and include/.
 fn download_prebuilt_mnn(manifest_dir: &Path, asset_name: &str, os: &str) -> PathBuf {
-    let cache_dir = manifest_dir.join("3rd_party").join("prebuilt");
-    let extract_dir = cache_dir.join(asset_name);
+    let local_cache_dir = manifest_dir.join("3rd_party").join("prebuilt");
+    let local_extract_dir = local_cache_dir.join(asset_name);
 
-    // Check if already extracted
-    if extract_dir.join("lib").exists() && extract_dir.join("include").exists() {
+    // Keep using an existing checkout-level cache for local developer builds,
+    // but never create it from build.rs: cargo publish verification forbids
+    // modifying the package source directory.
+    if local_extract_dir.join("lib").exists() && local_extract_dir.join("include").exists() {
         println!(
             "cargo:warning=Using cached prebuilt MNN from: {}",
-            extract_dir.display()
+            local_extract_dir.display()
         );
         // Ensure dynamic libs are removed even from cached extractions
+        remove_dynamic_libs(&local_extract_dir);
+        return local_extract_dir;
+    }
+
+    let cache_dir =
+        PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is not set")).join("prebuilt");
+    let extract_dir = cache_dir.join(asset_name);
+
+    if extract_dir.join("lib").exists() && extract_dir.join("include").exists() {
+        println!(
+            "cargo:warning=Using OUT_DIR prebuilt MNN from: {}",
+            extract_dir.display()
+        );
         remove_dynamic_libs(&extract_dir);
         return extract_dir;
     }
@@ -363,7 +378,7 @@ fn remove_dynamic_libs(extract_dir: &Path) {
 fn download_file(url: &str, dest: &Path) {
     // Try curl first (available on all modern platforms)
     let status = Command::new("curl")
-        .args(&["-L", "-f", "-s", "-o"])
+        .args(&["--http1.1", "-L", "-f", "-s", "-o"])
         .arg(dest.to_str().unwrap())
         .arg(url)
         .status();

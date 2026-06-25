@@ -13,6 +13,7 @@ const DET_MODEL_PATH: &str = "models/PP-OCRv5_mobile_det.mnn";
 const REC_MODEL_PATH: &str = "models/PP-OCRv5_mobile_rec.mnn";
 const CHARSET_PATH: &str = "models/ppocr_keys_v5.txt";
 const TEST_IMAGE_PATH: &str = "res/test1.png";
+const ROTATED_CHINESE_PAGE_PATH: &str = "tests/fixtures/rotated_chinese_page.png";
 
 /// 检查模型文件是否存在
 fn models_exist() -> bool {
@@ -24,6 +25,18 @@ fn models_exist() -> bool {
 /// 检查测试图像是否存在
 fn test_image_exists() -> bool {
     std::path::Path::new(TEST_IMAGE_PATH).exists()
+}
+
+fn rotated_chinese_page_exists() -> bool {
+    std::path::Path::new(ROTATED_CHINESE_PAGE_PATH).exists()
+}
+
+fn is_rotated_text_box(points: &Option<[imageproc::point::Point<f32>; 4]>) -> bool {
+    let Some(points) = points else {
+        return false;
+    };
+
+    (points[0].y - points[1].y).abs() > 2.0 || (points[2].y - points[3].y).abs() > 2.0
 }
 
 #[test]
@@ -120,8 +133,7 @@ fn test_ocr_engine_with_config() {
         .with_det_options(DetOptions::fast())
         .with_rec_options(RecOptions::new().with_min_score(0.3));
 
-    let engine =
-        OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, Some(config));
+    let engine = OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, Some(config));
     assert!(engine.is_ok(), "配置 OCR 引擎失败: {:?}", engine.err());
 }
 
@@ -234,6 +246,50 @@ fn test_full_ocr_pipeline() {
         assert!(result.confidence >= 0.0 && result.confidence <= 1.0);
         assert!(result.bbox.area() > 0);
     }
+}
+
+#[test]
+fn test_v5_rotated_page_uses_quadrilateral_boxes() {
+    if !models_exist() || !rotated_chinese_page_exists() {
+        eprintln!("跳过测试：模型或倾斜页面测试图像不存在");
+        return;
+    }
+
+    let config = OcrEngineConfig::fast().with_min_result_confidence(0.7);
+    let engine =
+        OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, Some(config)).unwrap();
+    let image = image::open(ROTATED_CHINESE_PAGE_PATH).unwrap();
+
+    let results = engine
+        .recognize(&image)
+        .unwrap_or_else(|e| panic!("倾斜中文页 OCR 识别失败: {:?}", e));
+
+    assert!(
+        results.len() >= 20,
+        "v5 倾斜中文页应该识别出大量文本行，实际: {}",
+        results.len()
+    );
+
+    let quadrilateral_count = results
+        .iter()
+        .filter(|result| result.bbox.points.is_some())
+        .count();
+    assert_eq!(
+        quadrilateral_count,
+        results.len(),
+        "所有检测框都应该保留四点坐标"
+    );
+
+    let rotated_count = results
+        .iter()
+        .filter(|result| is_rotated_text_box(&result.bbox.points))
+        .count();
+    assert!(
+        rotated_count >= 20,
+        "大部分文本行应该是非水平四点框，实际斜框数: {} / {}",
+        rotated_count,
+        results.len()
+    );
 }
 
 #[test]

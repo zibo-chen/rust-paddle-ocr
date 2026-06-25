@@ -56,7 +56,9 @@ impl TextBox {
         Self {
             rect: Rect::at(x as i32, y as i32).of_size(width, height),
             score: self.score,
-            points: self.points,
+            points: self
+                .points
+                .map(|points| expand_ordered_points(points, border as f32, max_width, max_height)),
         }
     }
 }
@@ -168,62 +170,324 @@ pub fn extract_boxes_with_unclip(
             continue;
         }
 
-        // Calculate bounding box
-        let (min_x, min_y, max_x, max_y) = get_contour_bounds(&contour);
-
-        // Filter out contours in padding area
-        if min_x >= valid_width as i32 || min_y >= valid_height as i32 {
+        let contour_points = contour_points_in_valid_region(&contour, valid_width, valid_height);
+        if contour_points.len() < 4 {
             continue;
         }
 
-        // Clip to valid region
-        let min_x = min_x.max(0);
-        let min_y = min_y.max(0);
-        let max_x = max_x.min(valid_width as i32);
-        let max_y = max_y.min(valid_height as i32);
+        let Some(rotated_box) = minimum_area_rect(&contour_points) else {
+            continue;
+        };
 
-        let box_width = (max_x - min_x) as u32;
-        let box_height = (max_y - min_y) as u32;
-
-        // Filter boxes that are too small
-        if box_width * box_height < min_area {
+        if rotated_box.area() < min_area as f32 {
             continue;
         }
 
-        // Calculate unclip expansion amount
-        // DB algorithm uses area and perimeter to calculate expansion distance: distance = Area * unclip_ratio / Perimeter
-        let area = box_width as f32 * box_height as f32;
-        let perimeter = 2.0 * (box_width + box_height) as f32;
-        let expand_dist = (area * unclip_ratio / perimeter).max(1.0);
+        let expanded_points = rotated_box
+            .expand(unclip_ratio)
+            .clamped_points(valid_width, valid_height);
+        let scaled_points = scale_and_order_points(
+            expanded_points,
+            scale_x,
+            scale_y,
+            original_width,
+            original_height,
+        );
 
-        // Apply unclip expansion (on coordinates before scaling)
-        let expanded_min_x = (min_x as f32 - expand_dist).max(0.0) as i32;
-        let expanded_min_y = (min_y as f32 - expand_dist).max(0.0) as i32;
-        let expanded_max_x = (max_x as f32 + expand_dist).min(valid_width as f32) as i32;
-        let expanded_max_y = (max_y as f32 + expand_dist).min(valid_height as f32) as i32;
-
-        let expanded_w = (expanded_max_x - expanded_min_x) as u32;
-        let expanded_h = (expanded_max_y - expanded_min_y) as u32;
-
-        // Scale to original image size
-        let scaled_x = (expanded_min_x as f32 * scale_x) as i32;
-        let scaled_y = (expanded_min_y as f32 * scale_y) as i32;
-        let scaled_w = (expanded_w as f32 * scale_x) as u32;
-        let scaled_h = (expanded_h as f32 * scale_y) as u32;
-
-        // Ensure boundaries are within valid range
-        let final_x = scaled_x.max(0) as u32;
-        let final_y = scaled_y.max(0) as u32;
-        let final_w = scaled_w.min(original_width.saturating_sub(final_x));
-        let final_h = scaled_h.min(original_height.saturating_sub(final_y));
-
-        if final_w > 0 && final_h > 0 {
-            let rect = Rect::at(final_x as i32, final_y as i32).of_size(final_w, final_h);
-            boxes.push(TextBox::new(rect, 1.0));
+        if let Some(rect) =
+            rect_from_ordered_points(&scaled_points, original_width, original_height)
+        {
+            boxes.push(TextBox::with_points(rect, 1.0, scaled_points));
         }
     }
 
     boxes
+}
+
+fn contour_points_in_valid_region(
+    contour: &Contour<i32>,
+    valid_width: u32,
+    valid_height: u32,
+) -> Vec<Point<f32>> {
+    let max_x = valid_width.saturating_sub(1) as f32;
+    let max_y = valid_height.saturating_sub(1) as f32;
+
+    contour
+        .points
+        .iter()
+        .filter(|point| point.x >= 0 && point.y >= 0)
+        .filter(|point| point.x < valid_width as i32 && point.y < valid_height as i32)
+        .map(|point| Point::new((point.x as f32).min(max_x), (point.y as f32).min(max_y)))
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RotatedBox {
+    center: Point<f32>,
+    width: f32,
+    height: f32,
+    angle: f32,
+}
+
+impl RotatedBox {
+    fn area(&self) -> f32 {
+        self.width * self.height
+    }
+
+    fn perimeter(&self) -> f32 {
+        2.0 * (self.width + self.height)
+    }
+
+    fn expand(self, unclip_ratio: f32) -> Self {
+        let distance = (self.area() * unclip_ratio / self.perimeter()).max(1.0);
+        Self {
+            width: self.width + distance * 2.0,
+            height: self.height + distance * 2.0,
+            ..self
+        }
+    }
+
+    fn clamped_points(&self, valid_width: u32, valid_height: u32) -> [Point<f32>; 4] {
+        let cos = self.angle.cos();
+        let sin = self.angle.sin();
+        let half_w = self.width * 0.5;
+        let half_h = self.height * 0.5;
+        let corners = [
+            (-half_w, -half_h),
+            (half_w, -half_h),
+            (half_w, half_h),
+            (-half_w, half_h),
+        ];
+        let max_x = valid_width.saturating_sub(1) as f32;
+        let max_y = valid_height.saturating_sub(1) as f32;
+
+        let points = corners.map(|(x, y)| {
+            Point::new(
+                (self.center.x + x * cos - y * sin).clamp(0.0, max_x),
+                (self.center.y + x * sin + y * cos).clamp(0.0, max_y),
+            )
+        });
+
+        order_points(points)
+    }
+}
+
+fn minimum_area_rect(points: &[Point<f32>]) -> Option<RotatedBox> {
+    let hull = convex_hull(points);
+    if hull.len() < 3 {
+        return None;
+    }
+
+    let mut best: Option<RotatedBox> = None;
+    let mut best_area = f32::INFINITY;
+
+    for i in 0..hull.len() {
+        let p1 = hull[i];
+        let p2 = hull[(i + 1) % hull.len()];
+        let dx = p2.x - p1.x;
+        let dy = p2.y - p1.y;
+        if dx.abs() < f32::EPSILON && dy.abs() < f32::EPSILON {
+            continue;
+        }
+
+        let angle = dy.atan2(dx);
+        let cos = angle.cos();
+        let sin = angle.sin();
+
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+
+        for point in &hull {
+            let x = point.x * cos + point.y * sin;
+            let y = -point.x * sin + point.y * cos;
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+
+        let width = max_x - min_x;
+        let height = max_y - min_y;
+        let area = width * height;
+        if width <= 0.0 || height <= 0.0 || area >= best_area {
+            continue;
+        }
+
+        let center_x = (min_x + max_x) * 0.5;
+        let center_y = (min_y + max_y) * 0.5;
+        let center = Point::new(
+            center_x * cos - center_y * sin,
+            center_x * sin + center_y * cos,
+        );
+
+        best_area = area;
+        best = Some(RotatedBox {
+            center,
+            width,
+            height,
+            angle,
+        });
+    }
+
+    best
+}
+
+fn convex_hull(points: &[Point<f32>]) -> Vec<Point<f32>> {
+    let mut sorted = points.to_vec();
+    sorted.sort_by(|a, b| {
+        a.x.partial_cmp(&b.x)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    sorted.dedup_by(|a, b| (a.x - b.x).abs() < f32::EPSILON && (a.y - b.y).abs() < f32::EPSILON);
+
+    if sorted.len() <= 2 {
+        return sorted;
+    }
+
+    let mut lower = Vec::new();
+    for point in &sorted {
+        while lower.len() >= 2
+            && cross(lower[lower.len() - 2], lower[lower.len() - 1], *point) <= 0.0
+        {
+            lower.pop();
+        }
+        lower.push(*point);
+    }
+
+    let mut upper = Vec::new();
+    for point in sorted.iter().rev() {
+        while upper.len() >= 2
+            && cross(upper[upper.len() - 2], upper[upper.len() - 1], *point) <= 0.0
+        {
+            upper.pop();
+        }
+        upper.push(*point);
+    }
+
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    lower
+}
+
+fn cross(origin: Point<f32>, a: Point<f32>, b: Point<f32>) -> f32 {
+    (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x)
+}
+
+fn scale_and_order_points(
+    points: [Point<f32>; 4],
+    scale_x: f32,
+    scale_y: f32,
+    original_width: u32,
+    original_height: u32,
+) -> [Point<f32>; 4] {
+    let max_x = original_width.saturating_sub(1) as f32;
+    let max_y = original_height.saturating_sub(1) as f32;
+    order_points(points.map(|point| {
+        Point::new(
+            (point.x * scale_x).clamp(0.0, max_x),
+            (point.y * scale_y).clamp(0.0, max_y),
+        )
+    }))
+}
+
+fn order_points(points: [Point<f32>; 4]) -> [Point<f32>; 4] {
+    let mut top_left = points[0];
+    let mut top_right = points[0];
+    let mut bottom_right = points[0];
+    let mut bottom_left = points[0];
+
+    for point in points {
+        let sum = point.x + point.y;
+        let diff = point.x - point.y;
+
+        if sum < top_left.x + top_left.y {
+            top_left = point;
+        }
+        if sum > bottom_right.x + bottom_right.y {
+            bottom_right = point;
+        }
+        if diff > top_right.x - top_right.y {
+            top_right = point;
+        }
+        if diff < bottom_left.x - bottom_left.y {
+            bottom_left = point;
+        }
+    }
+
+    [top_left, top_right, bottom_right, bottom_left]
+}
+
+fn rect_from_ordered_points(
+    points: &[Point<f32>; 4],
+    original_width: u32,
+    original_height: u32,
+) -> Option<Rect> {
+    let min_x = points
+        .iter()
+        .map(|point| point.x)
+        .fold(f32::INFINITY, f32::min)
+        .floor()
+        .max(0.0) as u32;
+    let min_y = points
+        .iter()
+        .map(|point| point.y)
+        .fold(f32::INFINITY, f32::min)
+        .floor()
+        .max(0.0) as u32;
+    let max_x = points
+        .iter()
+        .map(|point| point.x)
+        .fold(f32::NEG_INFINITY, f32::max)
+        .ceil()
+        .min(original_width as f32) as u32;
+    let max_y = points
+        .iter()
+        .map(|point| point.y)
+        .fold(f32::NEG_INFINITY, f32::max)
+        .ceil()
+        .min(original_height as f32) as u32;
+
+    if max_x <= min_x || max_y <= min_y {
+        return None;
+    }
+
+    Some(Rect::at(min_x as i32, min_y as i32).of_size(max_x - min_x, max_y - min_y))
+}
+
+fn expand_ordered_points(
+    points: [Point<f32>; 4],
+    border: f32,
+    max_width: u32,
+    max_height: u32,
+) -> [Point<f32>; 4] {
+    if border <= 0.0 {
+        return points;
+    }
+
+    let center = Point::new(
+        points.iter().map(|p| p.x).sum::<f32>() / 4.0,
+        points.iter().map(|p| p.y).sum::<f32>() / 4.0,
+    );
+    let max_x = max_width.saturating_sub(1) as f32;
+    let max_y = max_height.saturating_sub(1) as f32;
+
+    order_points(points.map(|point| {
+        let dx = point.x - center.x;
+        let dy = point.y - center.y;
+        let len = (dx * dx + dy * dy).sqrt();
+        if len <= f32::EPSILON {
+            return point;
+        }
+
+        Point::new(
+            (point.x + dx / len * border).clamp(0.0, max_x),
+            (point.y + dy / len * border).clamp(0.0, max_y),
+        )
+    }))
 }
 
 /// Get contour bounds
@@ -757,6 +1021,79 @@ mod tests {
         // 左上角应该被限制在 (0, 0)
         assert_eq!(expanded.rect.left(), 0);
         assert_eq!(expanded.rect.top(), 0);
+    }
+
+    #[test]
+    fn test_textbox_expand_keeps_rotated_points() {
+        let rect = Rect::at(10, 10).of_size(100, 40);
+        let points = [
+            Point::new(12.0, 20.0),
+            Point::new(105.0, 12.0),
+            Point::new(108.0, 48.0),
+            Point::new(15.0, 56.0),
+        ];
+        let expanded = TextBox::with_points(rect, 0.9, points).expand(5, 200, 200);
+
+        assert!(expanded.points.is_some());
+        let expanded_points = expanded.points.unwrap();
+        assert_ne!(expanded_points[0], points[0]);
+        assert_ne!(expanded_points[1], points[1]);
+    }
+
+    #[test]
+    fn test_extract_boxes_returns_rotated_points() {
+        let width = 100;
+        let height = 80;
+        let quad = [
+            Point::new(20.0, 30.0),
+            Point::new(80.0, 20.0),
+            Point::new(85.0, 40.0),
+            Point::new(25.0, 50.0),
+        ];
+        let mut mask = vec![0u8; width * height];
+        for y in 0..height {
+            for x in 0..width {
+                if point_in_quad(x as f32 + 0.5, y as f32 + 0.5, &quad) {
+                    mask[y * width + x] = 255;
+                }
+            }
+        }
+
+        let boxes = extract_boxes_with_unclip(
+            &mask,
+            width as u32,
+            height as u32,
+            width as u32,
+            height as u32,
+            width as u32,
+            height as u32,
+            16,
+            1.0,
+        );
+
+        let text_box = boxes
+            .iter()
+            .find(|text_box| text_box.points.is_some())
+            .expect("expected a rotated text box");
+        let points = text_box.points.unwrap();
+        assert!(
+            (points[0].y - points[1].y).abs() > 2.0,
+            "top edge should preserve rotation: {points:?}"
+        );
+    }
+
+    fn point_in_quad(x: f32, y: f32, points: &[Point<f32>; 4]) -> bool {
+        let mut inside = false;
+        let mut prev = points.len() - 1;
+        for current in 0..points.len() {
+            let pi = points[current];
+            let pj = points[prev];
+            if (pi.y > y) != (pj.y > y) && x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y) + pi.x {
+                inside = !inside;
+            }
+            prev = current;
+        }
+        inside
     }
 
     #[test]

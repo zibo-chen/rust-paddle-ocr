@@ -6,7 +6,7 @@
 //! 3. 适用于调试和验证 OCR 流程
 
 use image::{GenericImageView, Rgb, RgbImage};
-use imageproc::drawing::draw_hollow_rect_mut;
+use imageproc::drawing::{draw_hollow_rect_mut, draw_line_segment_mut};
 use imageproc::rect::Rect;
 use ocr_rs::{OcrEngine, OcrEngineConfig};
 use std::env;
@@ -119,17 +119,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let color = colors[i % colors.len()];
         let bbox = &result.bbox;
 
-        // 绘制矩形边框（绘制2次让边框更明显）
-        let rect = Rect::at(bbox.rect.left(), bbox.rect.top())
-            .of_size(bbox.rect.width(), bbox.rect.height());
+        if let Some(points) = &bbox.points {
+            for idx in 0..4 {
+                let start = points[idx];
+                let end = points[(idx + 1) % 4];
+                draw_line_segment_mut(&mut output_image, (start.x, start.y), (end.x, end.y), color);
+                draw_line_segment_mut(
+                    &mut output_image,
+                    (start.x + 1.0, start.y + 1.0),
+                    (end.x + 1.0, end.y + 1.0),
+                    color,
+                );
+            }
+        } else {
+            // 绘制矩形边框（绘制2次让边框更明显）
+            let rect = Rect::at(bbox.rect.left(), bbox.rect.top())
+                .of_size(bbox.rect.width(), bbox.rect.height());
 
-        draw_hollow_rect_mut(&mut output_image, rect, color);
+            draw_hollow_rect_mut(&mut output_image, rect, color);
 
-        // 绘制加粗边框
-        if bbox.rect.left() > 0 && bbox.rect.top() > 0 {
-            let rect2 = Rect::at(bbox.rect.left() - 1, bbox.rect.top() - 1)
-                .of_size(bbox.rect.width() + 2, bbox.rect.height() + 2);
-            draw_hollow_rect_mut(&mut output_image, rect2, color);
+            // 绘制加粗边框
+            if bbox.rect.left() > 0 && bbox.rect.top() > 0 {
+                let rect2 = Rect::at(bbox.rect.left() - 1, bbox.rect.top() - 1)
+                    .of_size(bbox.rect.width() + 2, bbox.rect.height() + 2);
+                draw_hollow_rect_mut(&mut output_image, rect2, color);
+            }
         }
 
         // 可选：绘制索引标签（如果需要在图像上显示序号）

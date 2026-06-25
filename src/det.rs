@@ -2,7 +2,9 @@
 //!
 //! Provides text region detection functionality based on PaddleOCR detection models
 
-use image::{DynamicImage, GenericImageView};
+use image::{DynamicImage, GenericImageView, Rgb, RgbImage};
+use imageproc::geometric_transformations::{warp_into, Interpolation, Projection};
+use imageproc::point::Point;
 use ndarray::ArrayD;
 use std::path::Path;
 
@@ -226,12 +228,7 @@ impl DetModel {
             let expanded = text_box.expand(self.options.box_border, width, height);
 
             // Crop image
-            let cropped = image.crop_imm(
-                expanded.rect.left() as u32,
-                expanded.rect.top() as u32,
-                expanded.rect.width(),
-                expanded.rect.height(),
-            );
+            let cropped = crop_text_region(image, &expanded);
 
             results.push((cropped, expanded));
         }
@@ -338,6 +335,79 @@ impl DetModel {
 
         Ok(boxes)
     }
+}
+
+fn crop_text_region(image: &DynamicImage, text_box: &TextBox) -> DynamicImage {
+    if let Some(points) = text_box.points {
+        if let Some(cropped) = crop_rotated_region(image, points) {
+            return cropped;
+        }
+    }
+
+    crop_axis_aligned_region(image, text_box)
+}
+
+fn crop_axis_aligned_region(image: &DynamicImage, text_box: &TextBox) -> DynamicImage {
+    let (image_width, image_height) = image.dimensions();
+    let x = text_box.rect.left().max(0) as u32;
+    let y = text_box.rect.top().max(0) as u32;
+    let width = text_box
+        .rect
+        .width()
+        .min(image_width.saturating_sub(x))
+        .max(1);
+    let height = text_box
+        .rect
+        .height()
+        .min(image_height.saturating_sub(y))
+        .max(1);
+
+    image.crop_imm(x, y, width, height)
+}
+
+fn crop_rotated_region(image: &DynamicImage, points: [Point<f32>; 4]) -> Option<DynamicImage> {
+    let crop_width = distance(points[0], points[1])
+        .max(distance(points[3], points[2]))
+        .round()
+        .max(1.0) as u32;
+    let crop_height = distance(points[0], points[3])
+        .max(distance(points[1], points[2]))
+        .round()
+        .max(1.0) as u32;
+
+    if crop_width <= 1 || crop_height <= 1 {
+        return None;
+    }
+
+    let source_points = points.map(|point| (point.x, point.y));
+    let target_points = [
+        (0.0, 0.0),
+        (crop_width.saturating_sub(1) as f32, 0.0),
+        (
+            crop_width.saturating_sub(1) as f32,
+            crop_height.saturating_sub(1) as f32,
+        ),
+        (0.0, crop_height.saturating_sub(1) as f32),
+    ];
+
+    let projection = Projection::from_control_points(source_points, target_points)?;
+    let source = image.to_rgb8();
+    let mut output = RgbImage::new(crop_width, crop_height);
+    warp_into(
+        &source,
+        &projection,
+        Interpolation::Bilinear,
+        Rgb([255, 255, 255]),
+        &mut output,
+    );
+
+    Some(DynamicImage::ImageRgb8(output))
+}
+
+fn distance(a: Point<f32>, b: Point<f32>) -> f32 {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    (dx * dx + dy * dy).sqrt()
 }
 
 /// Low-level detection API
