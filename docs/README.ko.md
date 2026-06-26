@@ -4,10 +4,10 @@
 
 PaddleOCR 모델과 MNN 추론 런타임을 사용하는 경량 Rust OCR 라이브러리입니다. 텍스트 검출, 텍스트 인식, 엔드투엔드 OCR, 파일 또는 메모리 바이트에서의 모델 로딩을 지원합니다.
 
-관련 도구:
-- CLI: [newbee_ocr_cli](../../newbee_ocr_cli)
-- HTTP 서비스: [newbee_ocr_service](../../newbee_ocr_service)
-- C API 바인딩: [paddle-ocr-capi](../../paddle-ocr-capi)
+관련 프로젝트:
+- CLI: [newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)
+- C API 바인딩: [paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi)
+- HTTP 서비스: `newbee_ocr_service`는 로컬 전용이며 공개 저장소로 게시하지 않았습니다.
 
 ## 지원 모델
 

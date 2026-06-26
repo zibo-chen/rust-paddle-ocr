@@ -4,10 +4,10 @@
 
 A lightweight Rust OCR library based on PaddleOCR models and the MNN inference runtime. It provides text detection, text recognition, and end-to-end OCR with file or in-memory model loading.
 
-Related tools:
-- CLI: [newbee_ocr_cli](../newbee_ocr_cli)
-- HTTP service: [newbee_ocr_service](../newbee_ocr_service)
-- C API bindings: [paddle-ocr-capi](../paddle-ocr-capi)
+Related projects:
+- CLI: [newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)
+- C API bindings: [paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi)
+- HTTP service: `newbee_ocr_service` is local-only and is not published as a public repository.
 
 ## Supported Models
 

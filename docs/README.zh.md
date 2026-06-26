@@ -4,10 +4,10 @@
 
 一个基于 PaddleOCR 模型和 MNN 推理运行时的轻量级 Rust OCR 库。支持文本检测、文本识别、端到端 OCR，以及从文件或内存字节加载模型。
 
-相关工具：
-- CLI：[newbee_ocr_cli](../../newbee_ocr_cli)
-- HTTP 服务：[newbee_ocr_service](../../newbee_ocr_service)
-- C API 绑定：[paddle-ocr-capi](../../paddle-ocr-capi)
+相关项目：
+- CLI：[newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)
+- C API 绑定：[paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi)
+- HTTP 服务：`newbee_ocr_service` 仅在本地仓库中，未发布为公开项目。
 
 ## 支持的模型
 
