@@ -137,19 +137,37 @@ pub fn preprocess_for_det(
     let (w, h) = img.dimensions();
     let pad_w = get_padded_size(w) as usize;
     let pad_h = get_padded_size(h) as usize;
+    let (w, h) = (w as usize, h as usize);
 
     let mut input = Array4::<f32>::zeros((1, 3, pad_h, pad_w));
     let rgb_img = img.to_rgb8();
+    let rgb = rgb_img.as_raw();
+
+    let plane_size = pad_h * pad_w;
+    let data = input
+        .as_slice_mut()
+        .expect("Array4 created by zeros should be contiguous");
+    let scales = [
+        1.0 / (255.0 * params.std[0]),
+        1.0 / (255.0 * params.std[1]),
+        1.0 / (255.0 * params.std[2]),
+    ];
+    let offsets = [
+        -params.mean[0] / params.std[0],
+        -params.mean[1] / params.std[1],
+        -params.mean[2] / params.std[2],
+    ];
 
     // Normalize and pad
-    for y in 0..h as usize {
-        for x in 0..w as usize {
-            let pixel = rgb_img.get_pixel(x as u32, y as u32);
-            let [r, g, b] = pixel.0;
+    for y in 0..h {
+        let src_row = &rgb[y * w * 3..(y + 1) * w * 3];
+        let dst_row = y * pad_w;
 
-            input[[0, 0, y, x]] = (r as f32 / 255.0 - params.mean[0]) / params.std[0];
-            input[[0, 1, y, x]] = (g as f32 / 255.0 - params.mean[1]) / params.std[1];
-            input[[0, 2, y, x]] = (b as f32 / 255.0 - params.mean[2]) / params.std[2];
+        for (x, pixel) in src_row.chunks_exact(3).enumerate() {
+            let dst = dst_row + x;
+            data[dst] = pixel[0] as f32 * scales[0] + offsets[0];
+            data[plane_size + dst] = pixel[1] as f32 * scales[1] + offsets[1];
+            data[plane_size * 2 + dst] = pixel[2] as f32 * scales[2] + offsets[2];
         }
     }
 
@@ -165,36 +183,43 @@ pub fn preprocess_for_rec(
     target_height: u32,
     params: &NormalizeParams,
 ) -> OcrResult<ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>> {
-    let (w, h) = img.dimensions();
+    let (_, h) = img.dimensions();
 
-    // Calculate scaled width
-    let scale = target_height as f64 / h as f64;
-    let target_width = (w as f64 * scale).round() as u32;
-
-    // Scale image
-    let resized = if h != target_height {
-        img.resize_exact(
-            target_width,
-            target_height,
-            image::imageops::FilterType::Lanczos3,
-        )
-    } else {
+    let resized = if h == target_height {
         img.clone()
+    } else {
+        resize_to_height(img, target_height)?
     };
 
     let rgb_img = resized.to_rgb8();
-    let (w, h) = (target_width as usize, target_height as usize);
+    let rgb = rgb_img.as_raw();
+    let (w, h) = (rgb_img.width() as usize, rgb_img.height() as usize);
 
     let mut input = Array4::<f32>::zeros((1, 3, h, w));
+    let plane_size = h * w;
+    let data = input
+        .as_slice_mut()
+        .expect("Array4 created by zeros should be contiguous");
+    let scales = [
+        1.0 / (255.0 * params.std[0]),
+        1.0 / (255.0 * params.std[1]),
+        1.0 / (255.0 * params.std[2]),
+    ];
+    let offsets = [
+        -params.mean[0] / params.std[0],
+        -params.mean[1] / params.std[1],
+        -params.mean[2] / params.std[2],
+    ];
 
     for y in 0..h {
-        for x in 0..w {
-            let pixel = rgb_img.get_pixel(x as u32, y as u32);
-            let [r, g, b] = pixel.0;
+        let src_row = &rgb[y * w * 3..(y + 1) * w * 3];
+        let dst_row = y * w;
 
-            input[[0, 0, y, x]] = (r as f32 / 255.0 - params.mean[0]) / params.std[0];
-            input[[0, 1, y, x]] = (g as f32 / 255.0 - params.mean[1]) / params.std[1];
-            input[[0, 2, y, x]] = (b as f32 / 255.0 - params.mean[2]) / params.std[2];
+        for (x, pixel) in src_row.chunks_exact(3).enumerate() {
+            let dst = dst_row + x;
+            data[dst] = pixel[0] as f32 * scales[0] + offsets[0];
+            data[plane_size + dst] = pixel[1] as f32 * scales[1] + offsets[1];
+            data[plane_size * 2 + dst] = pixel[2] as f32 * scales[2] + offsets[2];
         }
     }
 
@@ -228,19 +253,41 @@ pub fn preprocess_batch_for_rec(
     let batch_size = images.len();
 
     let mut batch = Array4::<f32>::zeros((batch_size, 3, target_height as usize, max_width));
+    let sample_size = 3 * target_height as usize * max_width;
+    let plane_size = target_height as usize * max_width;
+    let data = batch
+        .as_slice_mut()
+        .expect("Array4 created by zeros should be contiguous");
+    let scales = [
+        1.0 / (255.0 * params.std[0]),
+        1.0 / (255.0 * params.std[1]),
+        1.0 / (255.0 * params.std[2]),
+    ];
+    let offsets = [
+        -params.mean[0] / params.std[0],
+        -params.mean[1] / params.std[1],
+        -params.mean[2] / params.std[2],
+    ];
 
-    for (i, (img, &w)) in images.iter().zip(widths.iter()).enumerate() {
+    for (i, img) in images.iter().enumerate() {
         let resized = resize_to_height(img, target_height)?;
         let rgb_img = resized.to_rgb8();
+        let rgb = rgb_img.as_raw();
+        let w = rgb_img.width() as usize;
+        let h = target_height as usize;
+        let sample_offset = i * sample_size;
 
-        for y in 0..target_height as usize {
-            for x in 0..w as usize {
-                let pixel = rgb_img.get_pixel(x as u32, y as u32);
-                let [r, g, b] = pixel.0;
+        for y in 0..h {
+            let src_row = &rgb[y * w * 3..(y + 1) * w * 3];
+            let dst_row = y * max_width;
 
-                batch[[i, 0, y, x]] = (r as f32 / 255.0 - params.mean[0]) / params.std[0];
-                batch[[i, 1, y, x]] = (g as f32 / 255.0 - params.mean[1]) / params.std[1];
-                batch[[i, 2, y, x]] = (b as f32 / 255.0 - params.mean[2]) / params.std[2];
+            for (x, pixel) in src_row.chunks_exact(3).enumerate() {
+                let dst = sample_offset + dst_row + x;
+                data[dst] = pixel[0] as f32 * scales[0] + offsets[0];
+                data[sample_offset + plane_size + dst_row + x] =
+                    pixel[1] as f32 * scales[1] + offsets[1];
+                data[sample_offset + plane_size * 2 + dst_row + x] =
+                    pixel[2] as f32 * scales[2] + offsets[2];
             }
         }
     }

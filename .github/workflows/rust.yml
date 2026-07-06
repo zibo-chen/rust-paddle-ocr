@@ -81,3 +81,26 @@ jobs:
           command: test
           args: --verbose ${{ matrix.os == 'windows-2022' && '--release' || '' }} --target ${{ matrix.target }}
 
+  performance-smoke:
+    name: Performance smoke
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      OCR_RS_PERF_TESTS: "1"
+      OCR_RS_PERF_ITERS: "2"
+      OCR_RS_PERF_BATCH_SIZE: "8"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Run release performance smoke tests
+        run: cargo test --release --test performance_tests -- --nocapture --test-threads=1
+
+      - name: Compile Criterion benchmarks
+        run: cargo bench --bench bench_metrics --no-run

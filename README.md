@@ -85,6 +85,22 @@ cargo build --release
 cargo test
 ```
 
+## Performance Checks
+
+Run Criterion benchmarks locally:
+
+```bash
+cargo bench --bench bench_metrics
+```
+
+Run the CI-style performance smoke test:
+
+```bash
+OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture --test-threads=1
+```
+
+GitHub Actions runs the release smoke test on Ubuntu and compiles the Criterion benchmarks. The smoke test prints `PERF_METRIC` lines, but does not fail on fixed latency thresholds because hosted runners vary.
+
 Prebuilt MNN libraries are used automatically when available. For custom MNN builds:
 
 ```bash

@@ -85,6 +85,22 @@ cargo build --release
 cargo test
 ```
 
+## パフォーマンス確認
+
+ローカルで Criterion ベンチマークを実行します。
+
+```bash
+cargo bench --bench bench_metrics
+```
+
+CI と同じ短いパフォーマンス smoke テストを実行します。
+
+```bash
+OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture --test-threads=1
+```
+
+GitHub Actions は Ubuntu 上で release モードの smoke テストを実行し、Criterion ベンチマークをコンパイルします。smoke テストは `PERF_METRIC` 行を出力しますが、ホスト runner の性能差が大きいため固定の遅延しきい値では失敗させません。
+
 利用可能な場合は事前ビルド済み MNN ライブラリが自動的に使われます。MNN をソースからビルドする場合：
 
 ```bash

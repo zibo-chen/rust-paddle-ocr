@@ -1,6 +1,6 @@
 [package]
 name = "ocr-rs"
-version = "2.3.1"
+version = "2.3.2"
 edition = "2021"
 authors = ["ChenZibo <qw.54@163.com>"]
 readme = "README.md"
@@ -81,6 +81,10 @@ futures = { version = "0.3", optional = true }
 [dev-dependencies]
 criterion = "0.5"
 
+
+[[bench]]
+name = "bench_metrics"
+harness = false
 
 [[example]]
 name = "advanced"

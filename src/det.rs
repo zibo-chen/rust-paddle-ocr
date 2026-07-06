@@ -11,7 +11,7 @@ use std::path::Path;
 use crate::error::{OcrError, OcrResult};
 use crate::mnn::{InferenceConfig, InferenceEngine};
 use crate::postprocess::{extract_boxes_with_unclip, TextBox};
-use crate::preprocess::{preprocess_for_det, NormalizeParams};
+use crate::preprocess::{preprocess_for_det, resize_to_max_side, NormalizeParams};
 
 /// Detection precision mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -218,22 +218,33 @@ impl DetModel {
     /// # Returns
     /// List of (text image, corresponding bounding box)
     pub fn detect_and_crop(&self, image: &DynamicImage) -> OcrResult<Vec<(DynamicImage, TextBox)>> {
-        let boxes = self.detect(image)?;
-        let (width, height) = image.dimensions();
+        let boxes = self.detect_expanded(image)?;
+        let rotated_source = if boxes.iter().any(|text_box| text_box.points.is_some()) {
+            Some(image.to_rgb8())
+        } else {
+            None
+        };
 
         let mut results = Vec::with_capacity(boxes.len());
 
         for text_box in boxes {
-            // Expand bounding box
-            let expanded = text_box.expand(self.options.box_border, width, height);
-
             // Crop image
-            let cropped = crop_text_region(image, &expanded);
+            let cropped = crop_text_region(image, rotated_source.as_ref(), &text_box);
 
-            results.push((cropped, expanded));
+            results.push((cropped, text_box));
         }
 
         Ok(results)
+    }
+
+    pub(crate) fn detect_expanded(&self, image: &DynamicImage) -> OcrResult<Vec<TextBox>> {
+        let boxes = self.detect(image)?;
+        let (width, height) = image.dimensions();
+
+        Ok(boxes
+            .into_iter()
+            .map(|text_box| text_box.expand(self.options.box_border, width, height))
+            .collect())
     }
 
     /// Fast detection (single inference)
@@ -241,7 +252,7 @@ impl DetModel {
         let (original_width, original_height) = image.dimensions();
 
         // Scale image
-        let scaled = self.scale_image(image);
+        let scaled = self.scale_image(image)?;
         let (scaled_width, scaled_height) = scaled.dimensions();
 
         // Preprocess
@@ -270,19 +281,8 @@ impl DetModel {
 
     /// Balanced mode detection (multi-scale)
     /// Scale image to maximum side length limit
-    fn scale_image(&self, image: &DynamicImage) -> DynamicImage {
-        let (w, h) = image.dimensions();
-        let max_dim = w.max(h);
-
-        if max_dim <= self.options.max_side_len {
-            return image.clone();
-        }
-
-        let scale = self.options.max_side_len as f64 / max_dim as f64;
-        let new_w = (w as f64 * scale).round() as u32;
-        let new_h = (h as f64 * scale).round() as u32;
-
-        image.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3)
+    fn scale_image(&self, image: &DynamicImage) -> OcrResult<DynamicImage> {
+        resize_to_max_side(image, self.options.max_side_len)
     }
 
     /// Post-process inference output
@@ -304,11 +304,8 @@ impl DetModel {
             ));
         }
 
-        // Extract segmentation mask (only valid region, remove padding)
-        let mask_data: Vec<f32> = output.iter().cloned().collect();
-
         // Binarization
-        let binary_mask: Vec<u8> = mask_data
+        let binary_mask: Vec<u8> = output
             .iter()
             .map(|&v| {
                 if v > self.options.score_threshold {
@@ -337,9 +334,13 @@ impl DetModel {
     }
 }
 
-fn crop_text_region(image: &DynamicImage, text_box: &TextBox) -> DynamicImage {
-    if let Some(points) = text_box.points {
-        if let Some(cropped) = crop_rotated_region(image, points) {
+fn crop_text_region(
+    image: &DynamicImage,
+    rotated_source: Option<&RgbImage>,
+    text_box: &TextBox,
+) -> DynamicImage {
+    if let (Some(points), Some(source)) = (text_box.points, rotated_source) {
+        if let Some(cropped) = crop_rotated_region(source, points) {
             return cropped;
         }
     }
@@ -365,7 +366,7 @@ fn crop_axis_aligned_region(image: &DynamicImage, text_box: &TextBox) -> Dynamic
     image.crop_imm(x, y, width, height)
 }
 
-fn crop_rotated_region(image: &DynamicImage, points: [Point<f32>; 4]) -> Option<DynamicImage> {
+fn crop_rotated_region(source: &RgbImage, points: [Point<f32>; 4]) -> Option<DynamicImage> {
     let crop_width = distance(points[0], points[1])
         .max(distance(points[3], points[2]))
         .round()
@@ -391,10 +392,9 @@ fn crop_rotated_region(image: &DynamicImage, points: [Point<f32>; 4]) -> Option<
     ];
 
     let projection = Projection::from_control_points(source_points, target_points)?;
-    let source = image.to_rgb8();
     let mut output = RgbImage::new(crop_width, crop_height);
     warp_into(
-        &source,
+        source,
         &projection,
         Interpolation::Bilinear,
         Rgb([255, 255, 255]),

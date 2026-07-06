@@ -85,6 +85,22 @@ cargo build --release
 cargo test
 ```
 
+## 性能检查
+
+本地运行 Criterion 基准：
+
+```bash
+cargo bench --bench bench_metrics
+```
+
+运行 CI 风格的性能 smoke 测试：
+
+```bash
+OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture --test-threads=1
+```
+
+GitHub Actions 会在 Ubuntu 上运行 release 模式 smoke 测试，并编译 Criterion 基准。smoke 测试会输出 `PERF_METRIC` 行，但不会用固定耗时阈值失败任务，因为托管 runner 的性能波动较大。
+
 默认会自动使用可用的预构建 MNN 库。如需自定义构建 MNN：
 
 ```bash

@@ -398,26 +398,15 @@ impl OcrEngine {
         };
 
         // 1. Detect text regions
-        let detections = self.det_model.detect_and_crop(&corrected_image)?;
+        let boxes = self.det_model.detect_expanded(&corrected_image)?;
 
-        if detections.is_empty() {
+        if boxes.is_empty() {
             return Ok(Vec::new());
         }
 
-        // 2. Batch recognition
-        let (images, boxes): (Vec<DynamicImage>, Vec<TextBox>) = detections.into_iter().unzip();
-
-        let rec_results = if self.config.enable_parallel && images.len() > 4 {
-            // Parallel recognition: for multiple text regions, use rayon for parallel processing
-            use rayon::prelude::*;
-            images
-                .par_iter()
-                .map(|img| self.rec_model.recognize(img))
-                .collect::<OcrResult<Vec<_>>>()?
-        } else {
-            // Sequential recognition: use batch inference
-            self.rec_model.recognize_batch(&images)?
-        };
+        // 2. Recognize directly from source image regions. This avoids materializing
+        // DynamicImage crops and a second resize before recognition preprocessing.
+        let rec_results = self.rec_model.recognize_regions(&corrected_image, &boxes)?;
 
         // 3. Combine results and filter low confidence
         let results: Vec<OcrResult_> = rec_results
