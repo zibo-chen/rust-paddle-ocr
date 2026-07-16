@@ -40,6 +40,8 @@ mod normal_impl {
         Unsupported,
         /// Model loading failed
         ModelLoadFailed(String),
+        /// Requested inference backend is not available in the linked MNN build
+        BackendUnavailable(String),
         /// Null pointer error
         NullPointer,
         /// Shape mismatch
@@ -57,6 +59,9 @@ mod normal_impl {
                 MnnError::RuntimeError(msg) => write!(f, "Runtime error: {}", msg),
                 MnnError::Unsupported => write!(f, "Unsupported operation"),
                 MnnError::ModelLoadFailed(msg) => write!(f, "Model loading failed: {}", msg),
+                MnnError::BackendUnavailable(backend) => {
+                    write!(f, "Backend unavailable: {}", backend)
+                }
                 MnnError::NullPointer => write!(f, "Null pointer"),
                 MnnError::ShapeMismatch { expected, got } => {
                     write!(f, "Shape mismatch: expected {:?}, got {:?}", expected, got)
@@ -118,6 +123,32 @@ mod normal_impl {
     }
 
     impl Backend {
+        /// Stable backend name used in errors, logs, and command-line options.
+        pub const fn as_str(self) -> &'static str {
+            match self {
+                Backend::CPU => "cpu",
+                Backend::Metal => "metal",
+                Backend::OpenCL => "opencl",
+                Backend::OpenGL => "opengl",
+                Backend::Vulkan => "vulkan",
+                Backend::CUDA => "cuda",
+                Backend::CoreML => "coreml",
+            }
+        }
+
+        /// Return whether the linked MNN library registered this backend.
+        pub fn is_available(self) -> bool {
+            unsafe { ffi::mnnr_is_backend_available(self.to_forward_type()) }
+        }
+
+        fn ensure_available(self) -> Result<()> {
+            if self.is_available() {
+                Ok(())
+            } else {
+                Err(MnnError::BackendUnavailable(self.as_str().to_string()))
+            }
+        }
+
         /// Convert to MNNForwardType integer value
         fn to_forward_type(self) -> i32 {
             match self {
@@ -210,6 +241,7 @@ mod normal_impl {
     impl SharedRuntime {
         /// Create new shared runtime
         pub fn new(config: &InferenceConfig) -> Result<Self> {
+            config.backend.ensure_available()?;
             let c_config = config.to_ffi();
             let runtime_ptr = unsafe { ffi::mnnr_create_runtime(&c_config) };
 
@@ -283,6 +315,7 @@ mod normal_impl {
             }
 
             let cfg = config.unwrap_or_default();
+            cfg.backend.ensure_available()?;
             let c_config = cfg.to_ffi();
 
             let engine_ptr = unsafe {
@@ -640,6 +673,7 @@ mod normal_impl {
             }
 
             let cfg = config.unwrap_or_default();
+            cfg.backend.ensure_available()?;
             let c_config = cfg.to_ffi();
 
             let pool_ptr = unsafe {
@@ -746,6 +780,54 @@ mod normal_impl {
             assert_eq!(config.thread_count, 8);
             assert_eq!(config.precision_mode, PrecisionMode::High);
             assert_eq!(config.backend, Backend::Metal);
+        }
+
+        #[test]
+        fn cpu_backend_is_always_available() {
+            assert!(Backend::CPU.is_available());
+        }
+
+        #[test]
+        fn backend_unavailable_error_names_the_requested_backend() {
+            let backend = [
+                Backend::CUDA,
+                Backend::Vulkan,
+                Backend::OpenCL,
+                Backend::OpenGL,
+                Backend::CoreML,
+                Backend::Metal,
+            ]
+            .into_iter()
+            .find(|backend| !backend.is_available())
+            .expect("at least one optional backend should be unavailable in a platform build");
+
+            let error = backend.ensure_available().unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("Backend unavailable: {}", backend.as_str())
+            );
+        }
+
+        #[test]
+        fn engine_rejects_an_unavailable_backend_before_loading_the_model() {
+            let backend = [
+                Backend::CUDA,
+                Backend::Vulkan,
+                Backend::OpenCL,
+                Backend::OpenGL,
+                Backend::CoreML,
+                Backend::Metal,
+            ]
+            .into_iter()
+            .find(|backend| !backend.is_available())
+            .expect("at least one optional backend should be unavailable in a platform build");
+            let config = InferenceConfig::new().with_backend(backend);
+
+            let result = InferenceEngine::from_buffer(&[0], Some(config));
+            assert!(matches!(
+                result,
+                Err(MnnError::BackendUnavailable(name)) if name == backend.as_str()
+            ));
         }
     }
 } // end of normal_impl module

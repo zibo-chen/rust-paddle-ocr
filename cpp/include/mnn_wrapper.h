@@ -49,6 +49,9 @@ extern "C"
     // Get MNN version string
     const char *mnnr_get_version(void);
 
+    // Check whether the requested MNN backend is registered.
+    bool mnnr_is_backend_available(int32_t forward_type);
+
     // ============== Shared Runtime API ==============
 
     // Create a shared runtime for resource sharing across engines

@@ -11,6 +11,12 @@
 #include <string>
 #include <memory>
 
+namespace MNN
+{
+    class RuntimeCreator;
+    MNN_PUBLIC const RuntimeCreator *MNNGetExtraRuntimeCreator(MNNForwardType type);
+}
+
 // C++11 compatible make_unique
 template <typename T, typename... Args>
 std::unique_ptr<T> make_unique_ptr(Args &&...args)
@@ -147,6 +153,15 @@ static bool init_engine_tensors(MNN_InferenceEngine *engine)
 const char *mnnr_get_version(void)
 {
     return MNN_VERSION;
+}
+
+bool mnnr_is_backend_available(int32_t forward_type)
+{
+    if (forward_type < MNN_FORWARD_CPU || forward_type >= MNN_FORWARD_ALL)
+    {
+        return false;
+    }
+    return MNN::MNNGetExtraRuntimeCreator(static_cast<MNNForwardType>(forward_type)) != nullptr;
 }
 
 // ============== Shared Runtime API ==============
