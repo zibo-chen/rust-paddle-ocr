@@ -3,21 +3,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
+mod build_support;
+
+use build_support::{
+    prebuilt_asset_name, select_link_mode, should_link_mnn_whole_archive, uses_msvc_flags,
+    BuildFeatures, MnnLinkMode, TargetInfo,
+};
+
 /// MNN prebuilt version to download from GitHub releases
 const MNN_PREBUILT_VERSION: &str = "dev";
 const MNN_PREBUILT_REPO: &str = "zibo-chen/MNN-Prebuilds";
-
-/// MNN linking mode
-enum MnnLinkMode {
-    /// Download prebuilt MNN from GitHub releases (default for supported platforms)
-    Prebuilt,
-    /// Build MNN from source
-    BuildFromSource,
-    /// Use pre-built MNN dynamic library (user-provided via MNN_LIB_DIR)
-    Dynamic,
-    /// Use pre-built MNN static library (user-provided via MNN_LIB_DIR)
-    Static,
-}
 
 fn main() {
     // 在 docs.rs 构建环境中，跳过所有 C++ 编译
@@ -29,6 +24,8 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let target_triple = env::var("TARGET").unwrap();
     let debug = env::var("DEBUG").unwrap();
 
     // Feature flags
@@ -43,32 +40,47 @@ fn main() {
     let mnn_static = env::var("CARGO_FEATURE_MNN_STATIC").is_ok();
     let build_from_source = env::var("CARGO_FEATURE_BUILD_MNN_FROM_SOURCE").is_ok();
 
-    if mnn_dynamic && mnn_static {
-        panic!("Features `mnn-dynamic` and `mnn-static` are mutually exclusive. Please enable only one.");
-    }
-
-    let link_mode = if mnn_dynamic {
-        MnnLinkMode::Dynamic
-    } else if mnn_static {
-        MnnLinkMode::Static
-    } else if build_from_source {
-        MnnLinkMode::BuildFromSource
-    } else if get_prebuilt_asset_name(&os, &arch).is_some() {
-        MnnLinkMode::Prebuilt
-    } else {
-        println!(
-            "cargo:warning=No prebuilt MNN available for {}/{}, building from source...",
-            os, arch
-        );
-        MnnLinkMode::BuildFromSource
+    let target = TargetInfo {
+        os: &os,
+        arch: &arch,
+        env: &target_env,
+        triple: &target_triple,
     };
+    let features = BuildFeatures {
+        coreml: coreml_enabled,
+        metal: metal_enabled,
+        cuda: cuda_enabled,
+        opencl: opencl_enabled,
+        opengl: opengl_enabled,
+        vulkan: vulkan_enabled,
+        mnn_dynamic,
+        mnn_static,
+        build_from_source,
+    };
+    let link_mode = select_link_mode(&target, &features)
+        .unwrap_or_else(|error| panic!("Invalid MNN build configuration: {}", error));
+
+    if matches!(link_mode, MnnLinkMode::BuildFromSource) && !build_from_source {
+        let backends = features.requested_backends();
+        if backends.is_empty() {
+            println!(
+                "cargo:warning=No compatible prebuilt MNN available for {}, building from source...",
+                target_triple
+            );
+        } else {
+            println!(
+                "cargo:warning=Prebuilt MNN does not contain backend(s) {}; building MNN from source...",
+                backends.join(", ")
+            );
+        }
+    }
 
     let manifest_dir_path = PathBuf::from(&manifest_dir);
 
     // Determine MNN include dir and library dir based on link mode
     let (mnn_include_dir, mnn_lib_dir) = match &link_mode {
         MnnLinkMode::Prebuilt => {
-            let asset_name = get_prebuilt_asset_name(&os, &arch)
+            let asset_name = prebuilt_asset_name(&target, MNN_PREBUILT_VERSION)
                 .expect("No prebuilt available (should have been caught earlier)");
             let prebuilt_dir = download_prebuilt_mnn(&manifest_dir_path, &asset_name, &os);
 
@@ -104,6 +116,7 @@ fn main() {
                 &mnn_source_dir,
                 &arch,
                 &os,
+                &target_env,
                 &debug,
                 coreml_enabled,
                 metal_enabled,
@@ -156,13 +169,14 @@ fn main() {
     };
 
     // Build our C++ wrapper using cc (always needed)
-    build_wrapper(&manifest_dir_path, &mnn_include_dir, &os, &link_mode);
+    build_wrapper(&manifest_dir_path, &mnn_include_dir, &target, &link_mode);
 
     // Link libraries
     link_libraries(
         &mnn_lib_dir,
-        &os,
+        &target,
         &link_mode,
+        &features,
         coreml_enabled,
         metal_enabled,
         cuda_enabled,
@@ -172,7 +186,13 @@ fn main() {
     );
 
     // Generate Rust bindings
-    bind_gen(&manifest_dir_path, &mnn_include_dir, &os, &arch);
+    bind_gen(
+        &manifest_dir_path,
+        &mnn_include_dir,
+        &os,
+        &arch,
+        &target_triple,
+    );
 }
 
 /// Get MNN include directories for pre-built library mode.
@@ -227,31 +247,6 @@ fn get_mnn_include_dirs(manifest_dir: &PathBuf) -> Vec<PathBuf> {
          - MNN_SOURCE_DIR: path to MNN source tree\n\
          Or ensure 3rd_party/MNN exists in the project root."
     );
-}
-
-/// Get the prebuilt asset name for the current OS/arch combination.
-/// Returns None if no prebuilt is available.
-fn get_prebuilt_asset_name(os: &str, arch: &str) -> Option<String> {
-    let suffix = match (os, arch) {
-        ("linux", "x86_64") => "linux-x86_64",
-        ("linux", "aarch64") => "linux-aarch64",
-        ("windows", "x86_64") => "windows-x86_64",
-        ("windows", "x86") => "windows-i686",
-        ("windows", "aarch64") => "windows-aarch64",
-        ("macos", _) => "macos-universal", // universal binary for both x86_64 and arm64
-        ("ios", "aarch64") => {
-            let rust_target = env::var("TARGET").unwrap_or_default();
-            if rust_target.contains("-sim") {
-                "ios-arm64-sim"
-            } else {
-                "ios-arm64"
-            }
-        }
-        ("android", "aarch64") => "android-arm64-v8a",
-        ("android", "arm") => "android-armeabi-v7a",
-        _ => return None,
-    };
-    Some(format!("mnn-{}-{}", MNN_PREBUILT_VERSION, suffix))
 }
 
 /// Download and extract prebuilt MNN library from GitHub releases.
@@ -526,6 +521,7 @@ fn build_mnn_with_cmake(
     mnn_source_dir: &PathBuf,
     arch: &str,
     os: &str,
+    target_env: &str,
     debug: &str,
     coreml_enabled: bool,
     metal_enabled: bool,
@@ -548,7 +544,7 @@ fn build_mnn_with_cmake(
         .define("MNN_SEP_BUILD", "OFF");
 
     // For Windows, always use Release mode to ensure consistent CRT linking
-    if os == "windows" {
+    if os == "windows" && target_env == "msvc" {
         // Force NMake Makefiles generator on Windows to avoid MSVC detection issues
         // This is more reliable in CI/CD environments like Jenkins
         config.generator("NMake Makefiles");
@@ -566,7 +562,7 @@ fn build_mnn_with_cmake(
             config.define("CMAKE_CXX_FLAGS", "/MT");
         }
     } else {
-        // For non-Windows platforms, respect debug flag
+        // For non-MSVC targets, respect the requested build profile.
         if debug == "true" {
             config.define("CMAKE_BUILD_TYPE", "Debug");
         } else {
@@ -699,7 +695,7 @@ fn build_mnn_with_cmake(
 fn build_wrapper(
     manifest_dir: &PathBuf,
     mnn_include_dirs: &[PathBuf],
-    os: &str,
+    target: &TargetInfo<'_>,
     link_mode: &MnnLinkMode,
 ) {
     let wrapper_file = manifest_dir.join("cpp/src/mnn_wrapper.cpp");
@@ -719,7 +715,9 @@ fn build_wrapper(
     }
 
     // Platform-specific C++ flags
-    if os == "windows" {
+    if uses_msvc_flags(target)
+        .unwrap_or_else(|error| panic!("Invalid C++ target configuration: {}", error))
+    {
         build.flag("/std:c++14").flag("/EHsc").flag("/W3");
         // Match CRT with prebuilt MNN: prebuilt uses /MT (static CRT)
         if matches!(link_mode, MnnLinkMode::Prebuilt) {
@@ -734,8 +732,9 @@ fn build_wrapper(
 
 fn link_libraries(
     lib_dirs: &[PathBuf],
-    os: &str,
+    target: &TargetInfo<'_>,
     link_mode: &MnnLinkMode,
+    features: &BuildFeatures,
     coreml_enabled: bool,
     metal_enabled: bool,
     cuda_enabled: bool,
@@ -743,6 +742,7 @@ fn link_libraries(
     opengl_enabled: bool,
     vulkan_enabled: bool,
 ) {
+    let os = target.os;
     // Add library search paths
     for dir in lib_dirs {
         println!("cargo:rustc-link-search=native={}", dir.display());
@@ -754,7 +754,11 @@ fn link_libraries(
             println!("cargo:rustc-link-lib=dylib=MNN");
         }
         MnnLinkMode::Static | MnnLinkMode::BuildFromSource | MnnLinkMode::Prebuilt => {
-            println!("cargo:rustc-link-lib=static=MNN");
+            if should_link_mnn_whole_archive(*link_mode, features) {
+                println!("cargo:rustc-link-lib=static:+whole-archive=MNN");
+            } else {
+                println!("cargo:rustc-link-lib=static=MNN");
+            }
         }
     }
 
@@ -835,7 +839,13 @@ fn link_libraries(
     }
 }
 
-fn bind_gen(manifest_dir: &PathBuf, mnn_include_dirs: &[PathBuf], os: &str, arch: &str) {
+fn bind_gen(
+    manifest_dir: &PathBuf,
+    mnn_include_dirs: &[PathBuf],
+    os: &str,
+    arch: &str,
+    target_triple: &str,
+) {
     let header_path = manifest_dir.join("cpp/include/mnn_wrapper.h");
 
     let mut builder = bindgen::Builder::default()
@@ -852,6 +862,10 @@ fn bind_gen(manifest_dir: &PathBuf, mnn_include_dirs: &[PathBuf], os: &str, arch
 
     if os == "linux" {
         builder = add_linux_system_include_args(builder);
+    }
+
+    if os == "windows" && target_triple.contains("-gnu") {
+        builder = builder.clang_arg(format!("--target={}", target_triple));
     }
 
     // Android-specific clang target and sysroot

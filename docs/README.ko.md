@@ -101,19 +101,26 @@ OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture
 
 GitHub Actions 는 Ubuntu 에서 release 모드 smoke 테스트를 실행하고 Criterion 벤치마크를 컴파일합니다. smoke 테스트는 `PERF_METRIC` 행을 출력하지만, 호스팅 runner 의 성능 차이가 크기 때문에 고정 지연 시간 임계값으로 실패시키지는 않습니다.
 
-사용 가능한 경우 사전 빌드된 MNN 라이브러리가 자동으로 사용됩니다. MNN 을 소스에서 빌드하려면:
+호환되는 경우 CPU 또는 Apple Metal 사전 빌드 MNN 이 자동으로 사용됩니다. 사전 빌드 패키지에 없는 GPU feature 를 활성화하면 MNN 을 소스에서 자동으로 빌드합니다.
 
 ```bash
 cargo build --features build-mnn-from-source
+cargo build --release --features cuda
+cargo build --release --features vulkan
 ```
 
-GPU 백엔드는 `OcrEngineConfig` 로 선택합니다.
+빌드하기 전에 선택한 백엔드의 SDK 와 개발 라이브러리를 설치해야 합니다. GPU 백엔드는 `OcrEngineConfig` 로 선택합니다.
 
 ```rust
 use ocr_rs::{Backend, OcrEngineConfig};
 
 let config = OcrEngineConfig::new().with_backend(Backend::Metal);
+assert!(Backend::Metal.is_available());
 ```
+
+링크된 MNN 에 요청한 백엔드가 등록되어 있지 않으면 CPU 로 조용히 폴백하지 않고 엔진 생성 시 `MnnError::BackendUnavailable` 을 반환합니다.
+
+`x86_64-pc-windows-gnu` 는 MNN 을 소스에서 빌드하므로 MinGW C/C++ 툴체인이 필요합니다. NVIDIA Windows CUDA 툴체인은 MSVC 를 요구합니다. CUDA 소스 빌드에는 `x86_64-pc-windows-msvc` 를 사용하거나 `mnn-dynamic`/`mnn-static` 으로 호환 MNN 라이브러리를 제공하세요.
 
 ## License
 

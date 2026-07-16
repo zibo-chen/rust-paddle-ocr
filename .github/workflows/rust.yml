@@ -34,6 +34,9 @@ jobs:
           # Windows x86
           - os: windows-2022
             target: i686-pc-windows-msvc
+          # Windows GNU x86_64 (cross-compiled with MinGW)
+          - os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
     
     steps:
       - uses: actions/checkout@v4
@@ -67,6 +70,21 @@ jobs:
           echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar" >> $GITHUB_ENV
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
         shell: bash
+
+      - name: Install MinGW Cross-Compilation Dependencies
+        if: contains(matrix.target, 'windows-gnu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+
+      - name: Set MinGW Cross-Compilation Environment Variables
+        if: contains(matrix.target, 'windows-gnu')
+        run: |
+          echo "CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc" >> $GITHUB_ENV
+          echo "CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++" >> $GITHUB_ENV
+          echo "AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar" >> $GITHUB_ENV
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc" >> $GITHUB_ENV
+        shell: bash
       
       - name: Build
         uses: actions-rs/cargo@v1
@@ -75,7 +93,7 @@ jobs:
           args: --verbose ${{ matrix.os == 'windows-2022' && '--release' || '' }} --target ${{ matrix.target }}
       
       - name: Run tests
-        if: contains(matrix.target, 'x86_64')
+        if: contains(matrix.target, 'x86_64') && !contains(matrix.target, 'windows-gnu')
         uses: actions-rs/cargo@v1
         with:
           command: test

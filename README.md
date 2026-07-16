@@ -101,19 +101,26 @@ OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture
 
 GitHub Actions runs the release smoke test on Ubuntu and compiles the Criterion benchmarks. The smoke test prints `PERF_METRIC` lines, but does not fail on fixed latency thresholds because hosted runners vary.
 
-Prebuilt MNN libraries are used automatically when available. For custom MNN builds:
+CPU prebuilts and Apple Metal prebuilts are used automatically when compatible. Enabling a GPU feature that is not present in the prebuilt package automatically builds MNN from source:
 
 ```bash
 cargo build --features build-mnn-from-source
+cargo build --release --features cuda
+cargo build --release --features vulkan
 ```
 
-GPU backends are selected through `OcrEngineConfig`:
+Install the SDK and development libraries required by the selected backend before building. GPU backends are selected through `OcrEngineConfig`:
 
 ```rust
 use ocr_rs::{Backend, OcrEngineConfig};
 
 let config = OcrEngineConfig::new().with_backend(Backend::Metal);
+assert!(Backend::Metal.is_available());
 ```
+
+Engine creation returns `MnnError::BackendUnavailable` when the requested backend was not registered instead of silently falling back to CPU.
+
+`x86_64-pc-windows-gnu` builds MNN from source and requires a MinGW C/C++ toolchain. NVIDIA's Windows CUDA toolchain requires MSVC; use `x86_64-pc-windows-msvc` for source-built CUDA, or provide a compatible MNN library with `mnn-dynamic`/`mnn-static`.
 
 ## License
 

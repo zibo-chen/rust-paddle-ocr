@@ -101,19 +101,26 @@ OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture
 
 GitHub Actions 会在 Ubuntu 上运行 release 模式 smoke 测试，并编译 Criterion 基准。smoke 测试会输出 `PERF_METRIC` 行，但不会用固定耗时阈值失败任务，因为托管 runner 的性能波动较大。
 
-默认会自动使用可用的预构建 MNN 库。如需自定义构建 MNN：
+兼容时会自动使用 CPU 预构建包或 Apple Metal 预构建包。启用预构建包未包含的 GPU feature 时，会自动从源码构建 MNN：
 
 ```bash
 cargo build --features build-mnn-from-source
+cargo build --release --features cuda
+cargo build --release --features vulkan
 ```
 
-GPU 后端通过 `OcrEngineConfig` 选择：
+构建前需要安装对应后端的 SDK 和开发库。GPU 后端通过 `OcrEngineConfig` 选择：
 
 ```rust
 use ocr_rs::{Backend, OcrEngineConfig};
 
 let config = OcrEngineConfig::new().with_backend(Backend::Metal);
+assert!(Backend::Metal.is_available());
 ```
+
+如果链接的 MNN 没有注册所请求的后端，创建引擎会返回 `MnnError::BackendUnavailable`，不再静默回退到 CPU。
+
+`x86_64-pc-windows-gnu` 会从源码构建 MNN，需要 MinGW C/C++ 工具链。NVIDIA 的 Windows CUDA 工具链要求 MSVC；源码构建 CUDA 请使用 `x86_64-pc-windows-msvc`，或通过 `mnn-dynamic`/`mnn-static` 提供兼容的 MNN 库。
 
 ## License
 
