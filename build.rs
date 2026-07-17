@@ -6,8 +6,8 @@ use std::{env, fs};
 mod build_support;
 
 use build_support::{
-    prebuilt_asset_name, select_link_mode, should_link_mnn_whole_archive, uses_msvc_flags,
-    BuildFeatures, MnnLinkMode, TargetInfo,
+    cuda_side_library_plan, prebuilt_asset_name, select_link_mode, should_link_mnn_whole_archive,
+    uses_msvc_flags, BuildFeatures, MnnLinkMode, TargetInfo,
 };
 
 /// MNN prebuilt version to download from GitHub releases
@@ -689,7 +689,40 @@ fn build_mnn_with_cmake(
 
     println!("cargo:rerun-if-changed=MNN/CMakeLists.txt");
 
-    config.build()
+    let dst = config.build();
+
+    if let Some(plan) = cuda_side_library_plan(os, cuda_enabled, MnnLinkMode::BuildFromSource) {
+        let source = dst.join(
+            plan.build_relative_path
+                .expect("source-built CUDA library must have a build path"),
+        );
+        let destination = dst.join(
+            plan.install_relative_path
+                .expect("source-built CUDA library must have an install path"),
+        );
+        if !source.exists() {
+            panic!(
+                "MNN CUDA side library was not produced at {}",
+                source.display()
+            );
+        }
+        fs::create_dir_all(
+            destination
+                .parent()
+                .expect("CUDA library install path must have a parent"),
+        )
+        .expect("Failed to create MNN CUDA library install directory");
+        fs::copy(&source, &destination).unwrap_or_else(|error| {
+            panic!(
+                "Failed to install MNN CUDA side library from {} to {}: {}",
+                source.display(),
+                destination.display(),
+                error
+            )
+        });
+    }
+
+    dst
 }
 
 fn build_wrapper(
@@ -811,7 +844,9 @@ fn link_libraries(
         println!("cargo:rustc-link-lib=cuda");
         println!("cargo:rustc-link-lib=cudart");
         println!("cargo:rustc-link-lib=cublas");
-        println!("cargo:rustc-link-lib=cudnn");
+        if let Some(plan) = cuda_side_library_plan(os, cuda_enabled, *link_mode) {
+            println!("cargo:rustc-link-lib=dylib={}", plan.link_name);
+        }
     }
 
     // OpenCL library

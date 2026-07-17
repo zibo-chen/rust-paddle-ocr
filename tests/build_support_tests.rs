@@ -2,8 +2,8 @@
 mod build_support;
 
 use build_support::{
-    prebuilt_asset_name, select_link_mode, should_link_mnn_whole_archive, uses_msvc_flags,
-    BuildConfigError, BuildFeatures, MnnLinkMode, TargetInfo,
+    cuda_side_library_plan, prebuilt_asset_name, select_link_mode, should_link_mnn_whole_archive,
+    uses_msvc_flags, BuildConfigError, BuildFeatures, CudaSideLibraryPlan, MnnLinkMode, TargetInfo,
 };
 
 fn target<'a>(os: &'a str, arch: &'a str, env: &'a str, triple: &'a str) -> TargetInfo<'a> {
@@ -206,4 +206,40 @@ fn prebuilt_and_dynamic_mnn_do_not_force_whole_archive_linking() {
         &metal
     ));
     assert!(!should_link_mnn_whole_archive(MnnLinkMode::Dynamic, &metal));
+}
+
+#[test]
+fn linux_source_cuda_installs_and_links_the_mnn_cuda_side_library() {
+    assert_eq!(
+        cuda_side_library_plan("linux", true, MnnLinkMode::BuildFromSource),
+        Some(CudaSideLibraryPlan {
+            link_name: "MNN_Cuda_Main",
+            build_relative_path: Some("build/source/backend/cuda/libMNN_Cuda_Main.so"),
+            install_relative_path: Some("lib/libMNN_Cuda_Main.so"),
+        })
+    );
+}
+
+#[test]
+fn user_supplied_linux_cuda_library_is_linked_without_source_copying() {
+    assert_eq!(
+        cuda_side_library_plan("linux", true, MnnLinkMode::Static),
+        Some(CudaSideLibraryPlan {
+            link_name: "MNN_Cuda_Main",
+            build_relative_path: None,
+            install_relative_path: None,
+        })
+    );
+}
+
+#[test]
+fn cpu_only_and_windows_cuda_do_not_use_the_linux_cuda_side_library() {
+    assert_eq!(
+        cuda_side_library_plan("linux", false, MnnLinkMode::BuildFromSource),
+        None
+    );
+    assert_eq!(
+        cuda_side_library_plan("windows", true, MnnLinkMode::BuildFromSource),
+        None
+    );
 }

@@ -10,6 +10,13 @@ pub enum MnnLinkMode {
     Static,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CudaSideLibraryPlan {
+    pub link_name: &'static str,
+    pub build_relative_path: Option<&'static str>,
+    pub install_relative_path: Option<&'static str>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BuildFeatures {
     pub coreml: bool,
@@ -174,4 +181,25 @@ pub fn should_link_mnn_whole_archive(link_mode: MnnLinkMode, features: &BuildFea
         link_mode,
         MnnLinkMode::BuildFromSource | MnnLinkMode::Static
     ) && features.requests_backend()
+}
+
+pub fn cuda_side_library_plan(
+    os: &str,
+    cuda_enabled: bool,
+    link_mode: MnnLinkMode,
+) -> Option<CudaSideLibraryPlan> {
+    if os != "linux" || !cuda_enabled {
+        return None;
+    }
+
+    let source_paths = matches!(link_mode, MnnLinkMode::BuildFromSource).then_some((
+        "build/source/backend/cuda/libMNN_Cuda_Main.so",
+        "lib/libMNN_Cuda_Main.so",
+    ));
+
+    Some(CudaSideLibraryPlan {
+        link_name: "MNN_Cuda_Main",
+        build_relative_path: source_paths.map(|paths| paths.0),
+        install_relative_path: source_paths.map(|paths| paths.1),
+    })
 }
