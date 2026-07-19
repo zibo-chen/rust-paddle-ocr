@@ -176,6 +176,15 @@ pub fn uses_msvc_flags<'a>(target: &TargetInfo<'a>) -> Result<bool, BuildConfigE
     Ok(target.os == "windows" && target.env == "msvc")
 }
 
+pub fn cpp_runtime_library(target: &TargetInfo<'_>) -> Option<&'static str> {
+    match (target.os, target.env) {
+        ("macos" | "ios", _) => Some("c++"),
+        ("linux", _) | ("windows", "gnu") => Some("stdc++"),
+        ("android", _) => Some("c++_static"),
+        _ => None,
+    }
+}
+
 pub fn should_link_mnn_whole_archive(link_mode: MnnLinkMode, features: &BuildFeatures) -> bool {
     matches!(
         link_mode,

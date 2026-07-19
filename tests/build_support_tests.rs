@@ -2,8 +2,9 @@
 mod build_support;
 
 use build_support::{
-    cuda_side_library_plan, prebuilt_asset_name, select_link_mode, should_link_mnn_whole_archive,
-    uses_msvc_flags, BuildConfigError, BuildFeatures, CudaSideLibraryPlan, MnnLinkMode, TargetInfo,
+    cpp_runtime_library, cuda_side_library_plan, prebuilt_asset_name, select_link_mode,
+    should_link_mnn_whole_archive, uses_msvc_flags, BuildConfigError, BuildFeatures,
+    CudaSideLibraryPlan, MnnLinkMode, TargetInfo,
 };
 
 fn target<'a>(os: &'a str, arch: &'a str, env: &'a str, triple: &'a str) -> TargetInfo<'a> {
@@ -242,4 +243,29 @@ fn cpu_only_and_windows_cuda_do_not_use_the_linux_cuda_side_library() {
         cuda_side_library_plan("windows", true, MnnLinkMode::BuildFromSource),
         None
     );
+}
+
+#[test]
+fn windows_gnu_explicitly_links_libstdcxx() {
+    let target = target("windows", "x86_64", "gnu", "x86_64-pc-windows-gnu");
+
+    assert_eq!(cpp_runtime_library(&target), Some("stdc++"));
+}
+
+#[test]
+fn windows_msvc_leaves_runtime_linking_to_msvc() {
+    let target = target("windows", "x86_64", "msvc", "x86_64-pc-windows-msvc");
+
+    assert_eq!(cpp_runtime_library(&target), None);
+}
+
+#[test]
+fn existing_platform_cpp_runtime_choices_are_preserved() {
+    let linux = target("linux", "x86_64", "gnu", "x86_64-unknown-linux-gnu");
+    let macos = target("macos", "aarch64", "", "aarch64-apple-darwin");
+    let android = target("android", "aarch64", "", "aarch64-linux-android");
+
+    assert_eq!(cpp_runtime_library(&linux), Some("stdc++"));
+    assert_eq!(cpp_runtime_library(&macos), Some("c++"));
+    assert_eq!(cpp_runtime_library(&android), Some("c++_static"));
 }

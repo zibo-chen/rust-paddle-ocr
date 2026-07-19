@@ -6,8 +6,8 @@ use std::{env, fs};
 mod build_support;
 
 use build_support::{
-    cuda_side_library_plan, prebuilt_asset_name, select_link_mode, should_link_mnn_whole_archive,
-    uses_msvc_flags, BuildFeatures, MnnLinkMode, TargetInfo,
+    cpp_runtime_library, cuda_side_library_plan, prebuilt_asset_name, select_link_mode,
+    should_link_mnn_whole_archive, uses_msvc_flags, BuildFeatures, MnnLinkMode, TargetInfo,
 };
 
 /// MNN prebuilt version to download from GitHub releases
@@ -740,6 +740,7 @@ fn build_wrapper(
 
     build
         .cpp(true)
+        .cpp_link_stdlib(None::<&str>)
         .file(&wrapper_file)
         .include(manifest_dir.join("cpp/include"));
 
@@ -795,22 +796,19 @@ fn link_libraries(
         }
     }
 
-    // Platform-specific C++ runtime
+    // Link the C++ runtime after MNN so GNU static linking can resolve MNN's symbols.
+    if let Some(runtime) = cpp_runtime_library(target) {
+        println!("cargo:rustc-link-lib={}", runtime);
+    }
+
+    // Other platform-specific system libraries
     match os {
-        "macos" | "ios" => {
-            println!("cargo:rustc-link-lib=c++");
-        }
         "linux" => {
-            println!("cargo:rustc-link-lib=stdc++");
             println!("cargo:rustc-link-lib=m");
             println!("cargo:rustc-link-lib=pthread");
         }
         "android" => {
-            println!("cargo:rustc-link-lib=c++_static");
             println!("cargo:rustc-link-lib=log");
-        }
-        "windows" => {
-            // MSVC runtime is linked automatically when using matching CRT settings
         }
         _ => {}
     }
