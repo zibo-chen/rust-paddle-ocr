@@ -112,9 +112,7 @@ fn run_full_pipeline_on_image(
         return;
     }
 
-    let config = OcrEngineConfig::fast()
-        .with_parallel(false)
-        .with_min_result_confidence(0.0);
+    let config = OcrEngineConfig::fast().with_min_result_confidence(0.0);
     let engine = OcrEngine::new(det_path, rec_path, charset_path, Some(config))
         .unwrap_or_else(|e| panic!("[{}] 引擎创建失败: {:?}", label, e));
 
@@ -161,9 +159,7 @@ fn assert_fixture_recognizes_text(
         return;
     }
 
-    let config = OcrEngineConfig::fast()
-        .with_parallel(false)
-        .with_min_result_confidence(0.0);
+    let config = OcrEngineConfig::fast().with_min_result_confidence(0.0);
     let engine = OcrEngine::new(det_path, rec_path, charset_path, Some(config))
         .unwrap_or_else(|e| panic!("[{}] 引擎创建失败: {:?}", label, e));
     let image = image::open(image_path).expect("无法打开多语言测试图片");
@@ -658,6 +654,101 @@ fn test_engine_pipeline_matches_public_crop_pipeline() {
         engine_texts, legacy_results,
         "OcrEngine::recognize 应与公开 detect_and_crop + recognize_batch 路径保持一致"
     );
+}
+
+#[test]
+fn test_parallel_engine_pipeline_preserves_page_goldens_and_order() {
+    if !require_file(DET_V6_TINY) || !require_file(REC_V6_TINY) || !require_file(CHARSET_V6_TINY) {
+        return;
+    }
+
+    let config = OcrEngineConfig::fast()
+        .with_parallel(true)
+        .with_min_result_confidence(0.0);
+    let parallel_engine = OcrEngine::new(DET_V6_TINY, REC_V6_TINY, CHARSET_V6_TINY, Some(config))
+        .expect("OCR 引擎创建失败");
+    let batch_config = OcrEngineConfig::fast()
+        .with_parallel(false)
+        .with_min_result_confidence(0.0);
+    let batch_engine = OcrEngine::new(
+        DET_V6_TINY,
+        REC_V6_TINY,
+        CHARSET_V6_TINY,
+        Some(batch_config),
+    )
+    .expect("batch OCR 引擎创建失败");
+    let golden_fragments = [
+        (
+            "res/1.png",
+            [
+                "The dominant sequence transduction models",
+                "Transformer generalizes",
+            ],
+        ),
+        (
+            "res/2.png",
+            ["Attention Is All You Need", "Submission history"],
+        ),
+        ("res/3.png", ["镀膜技术暗战", "2025年初上海眼镜展"]),
+        ("res/4.png", ["FLD", "PP-LiteSeg"]),
+    ];
+
+    for image_path in TEST_IMAGES {
+        if !require_file(image_path) {
+            continue;
+        }
+
+        let image = image::open(image_path).expect("无法加载页面测试图片");
+        let parallel_results = parallel_engine
+            .recognize(&image)
+            .expect("parallel recognize failed");
+        let batch_results = batch_engine
+            .recognize(&image)
+            .expect("batch recognize failed");
+        let batch_boxes = batch_results
+            .iter()
+            .map(|result| {
+                (
+                    result.bbox.rect.left(),
+                    result.bbox.rect.top(),
+                    result.bbox.rect.width(),
+                    result.bbox.rect.height(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let parallel_boxes = parallel_results
+            .iter()
+            .map(|result| {
+                (
+                    result.bbox.rect.left(),
+                    result.bbox.rect.top(),
+                    result.bbox.rect.width(),
+                    result.bbox.rect.height(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            parallel_boxes, batch_boxes,
+            "parallel exact-width dispatch changed result order or boxes for {image_path}"
+        );
+
+        let joined = parallel_results
+            .iter()
+            .map(|result| result.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let (_, expected_fragments) = golden_fragments
+            .iter()
+            .find(|(path, _)| path == image_path)
+            .expect("missing page golden fragments");
+        for fragment in expected_fragments {
+            assert!(
+                joined.contains(fragment),
+                "parallel OCR output for {image_path} lost golden fragment {fragment:?}: {joined:?}"
+            );
+        }
+    }
 }
 
 // ============================================================

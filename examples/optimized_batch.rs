@@ -20,19 +20,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let charset = "models/ppocr_keys_v5.txt";
 
     // 测试图像
-    let test_image = "res/Paste_1221144147238.png";
+    let test_image = "res/2.png";
 
     if !std::path::Path::new(test_image).exists() {
         eprintln!("测试图像不存在: {}", test_image);
         return Ok(());
     }
 
-    // ============ 1. 默认配置（序列批量推理）============
-    println!("1️⃣  默认配置 - 序列批量推理");
-    let config_default = OcrEngineConfig::fast();
+    // ============ 1. 强制批量推理 ============
+    println!("1️⃣  强制批量推理");
+    let config_default = OcrEngineConfig::fast().with_parallel(false);
 
-    let engine_default =
-        OcrEngine::new(det_model, rec_model, charset, Some(config_default))?;
+    let engine_default = OcrEngine::new(det_model, rec_model, charset, Some(config_default))?;
     let image = image::open(test_image)?;
 
     let start = Instant::now();
@@ -44,11 +43,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // ============ 2. 启用并行处理 ============
-    println!("2️⃣  启用并行处理 - Rayon 并行识别");
+    println!("2️⃣  启用 exact-width 并行识别");
     let config_parallel = OcrEngineConfig::fast().with_parallel(true);
 
-    let engine_parallel =
-        OcrEngine::new(det_model, rec_model, charset, Some(config_parallel))?;
+    let engine_parallel = OcrEngine::new(det_model, rec_model, charset, Some(config_parallel))?;
 
     let start = Instant::now();
     let results_parallel = engine_parallel.recognize(&image)?;
@@ -80,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ============ 4. 性能对比总结 ============
     println!("📊 性能对比总结：");
     println!(
-        "   序列批量推理: {:.2}ms",
+        "   强制批量推理: {:.2}ms",
         duration_default.as_secs_f64() * 1000.0
     );
     println!(

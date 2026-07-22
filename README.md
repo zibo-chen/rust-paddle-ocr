@@ -99,7 +99,7 @@ Run the CI-style performance smoke test:
 OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture --test-threads=1
 ```
 
-GitHub Actions runs the release smoke test on Ubuntu and compiles the Criterion benchmarks. The smoke test prints `PERF_METRIC` lines, but does not fail on fixed latency thresholds because hosted runners vary.
+GitHub Actions runs these release tests serially and stores the `PERF_METRIC` log as an artifact. The regression guard compares the direct exact-width pipeline with the legacy crop pipeline on the same runner and fails when the median ratio exceeds `OCR_RS_PERF_REGRESSION_LIMIT` (default `1.15`), avoiding unstable absolute latency limits.
 
 CPU prebuilts and Apple Metal prebuilts are used automatically when compatible. Enabling a GPU feature that is not present in the prebuilt package automatically builds MNN from source:
 

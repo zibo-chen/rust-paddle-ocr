@@ -99,7 +99,7 @@ CI と同じ短いパフォーマンス smoke テストを実行します。
 OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture --test-threads=1
 ```
 
-GitHub Actions は Ubuntu 上で release モードの smoke テストを実行し、Criterion ベンチマークをコンパイルします。smoke テストは `PERF_METRIC` 行を出力しますが、ホスト runner の性能差が大きいため固定の遅延しきい値では失敗させません。
+GitHub Actions は release モードのテストを直列実行し、`PERF_METRIC` ログを artifact として保存します。回帰ガードは同じ runner 上で direct exact-width パイプラインと従来の crop パイプラインを比較し、中央値の比率が `OCR_RS_PERF_REGRESSION_LIMIT`（既定値 `1.15`）を超えた場合に失敗するため、不安定な絶対時間には依存しません。
 
 互換性がある場合は CPU または Apple Metal の事前ビルド済み MNN が自動的に使われます。事前ビルドに含まれない GPU feature を有効にすると、MNN は自動的にソースからビルドされます。
 

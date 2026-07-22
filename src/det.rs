@@ -148,6 +148,16 @@ impl DetOptions {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DetectionGeometry {
+    output_width: u32,
+    output_height: u32,
+    scaled_width: u32,
+    scaled_height: u32,
+    original_width: u32,
+    original_height: u32,
+}
+
 /// Text detection model
 pub struct DetModel {
     engine: InferenceEngine,
@@ -266,15 +276,15 @@ impl DetModel {
         let out_w = output_shape[3] as u32;
         let out_h = output_shape[2] as u32;
 
-        let boxes = self.postprocess_output(
-            &output,
-            out_w,
-            out_h,
+        let geometry = DetectionGeometry {
+            output_width: out_w,
+            output_height: out_h,
             scaled_width,
             scaled_height,
             original_width,
             original_height,
-        )?;
+        };
+        let boxes = self.postprocess_output(&output, geometry)?;
 
         Ok(boxes)
     }
@@ -289,12 +299,7 @@ impl DetModel {
     fn postprocess_output(
         &self,
         output: &ArrayD<f32>,
-        out_w: u32,
-        out_h: u32,
-        scaled_width: u32,
-        scaled_height: u32,
-        original_width: u32,
-        original_height: u32,
+        geometry: DetectionGeometry,
     ) -> OcrResult<Vec<TextBox>> {
         // Retrieve output data
         let output_shape = output.shape();
@@ -320,12 +325,12 @@ impl DetModel {
         // DB algorithm needs to expand detected contours because model output segmentation mask is usually smaller than actual text region
         let boxes = extract_boxes_with_unclip(
             &binary_mask,
-            out_w,
-            out_h,
-            scaled_width,
-            scaled_height,
-            original_width,
-            original_height,
+            geometry.output_width,
+            geometry.output_height,
+            geometry.scaled_width,
+            geometry.scaled_height,
+            geometry.original_width,
+            geometry.original_height,
             self.options.min_area,
             self.options.unclip_ratio,
         );

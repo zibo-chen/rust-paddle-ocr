@@ -51,7 +51,7 @@ fn benchmark_backend(
 
     for i in 1..=iterations {
         let start = Instant::now();
-        let results = engine.recognize(&image)?;
+        let _results = engine.recognize(&image)?;
         let duration = start.elapsed();
         durations.push(duration);
 

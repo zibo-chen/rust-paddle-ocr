@@ -4,10 +4,12 @@ use ocr_rs::preprocess::{
     preprocess_batch_for_rec, preprocess_for_det, resize_to_max_side, NormalizeParams,
 };
 use ocr_rs::{DetModel, DetOptions, OcrEngine, OcrEngineConfig, RecModel, RecOptions};
+use rayon::prelude::*;
 use std::path::Path;
 use std::time::Duration;
 
 const TEST_IMAGE: &str = "res/1.png";
+const TEST_PAGE_IMAGE: &str = "res/2.png";
 const DET_V5: &str = "models/PP-OCRv5_mobile_det.mnn";
 const REC_V5: &str = "models/PP-OCRv5_mobile_rec.mnn";
 const CHARSET_V5: &str = "models/ppocr_keys_v5.txt";
@@ -79,8 +81,27 @@ fn load_image() -> Option<DynamicImage> {
     Some(image::open(TEST_IMAGE).expect("failed to load benchmark image"))
 }
 
-fn bench_config() -> OcrEngineConfig {
-    OcrEngineConfig::fast().with_parallel(false).with_threads(4)
+fn bench_config(enable_parallel: bool) -> OcrEngineConfig {
+    OcrEngineConfig::fast()
+        .with_parallel(enable_parallel)
+        .with_threads(4)
+}
+
+fn legacy_exact_width_pipeline(engine: &OcrEngine, image: &DynamicImage) -> usize {
+    let detections = engine
+        .det_model()
+        .detect_and_crop(image)
+        .expect("legacy detection crop failed");
+    let images = detections
+        .into_iter()
+        .map(|(crop, _)| crop)
+        .collect::<Vec<_>>();
+    let results = images
+        .par_iter()
+        .map(|crop| engine.rec_model().recognize(crop))
+        .collect::<ocr_rs::OcrResult<Vec<_>>>()
+        .expect("legacy exact-width recognition failed");
+    results.len()
 }
 
 fn load_detector(det_path: &str) -> DetModel {
@@ -311,20 +332,111 @@ fn bench_full_pipeline(c: &mut Criterion) {
             continue;
         }
 
-        let engine = OcrEngine::new(
+        let parallel_engine = OcrEngine::new(
             suite.det_path,
             suite.rec_path,
             suite.charset_path,
-            Some(bench_config()),
+            Some(bench_config(true)),
         )
         .expect("failed to create OCR engine");
+        let batch_engine = OcrEngine::new(
+            suite.det_path,
+            suite.rec_path,
+            suite.charset_path,
+            Some(bench_config(false)),
+        )
+        .expect("failed to create batch OCR engine");
 
-        group.bench_with_input(BenchmarkId::new("recognize", suite.label), suite, |b, _| {
+        group.bench_with_input(
+            BenchmarkId::new("parallel_exact", suite.label),
+            suite,
+            |b, _| {
+                b.iter(|| {
+                    let results = parallel_engine
+                        .recognize(black_box(&image))
+                        .expect("parallel OCR failed");
+                    black_box(results);
+                });
+            },
+        );
+        group.bench_with_input(BenchmarkId::new("batch", suite.label), suite, |b, _| {
             b.iter(|| {
-                let results = engine.recognize(black_box(&image)).expect("OCR failed");
+                let results = batch_engine
+                    .recognize(black_box(&image))
+                    .expect("batch OCR failed");
                 black_box(results);
             });
         });
+    }
+
+    group.finish();
+}
+
+fn bench_page_dispatch_regression(c: &mut Criterion) {
+    if !has_files(&[TEST_PAGE_IMAGE]) {
+        return;
+    }
+    let image = image::open(TEST_PAGE_IMAGE).expect("failed to load page benchmark image");
+    let suites = [MODEL_SUITES[0], MODEL_SUITES[1]];
+    let mut group = c.benchmark_group("page_dispatch_regression");
+    group.throughput(Throughput::Elements(1));
+
+    for suite in suites {
+        if !has_files(&[suite.det_path, suite.rec_path, suite.charset_path]) {
+            continue;
+        }
+
+        let parallel_engine = OcrEngine::new(
+            suite.det_path,
+            suite.rec_path,
+            suite.charset_path,
+            Some(bench_config(true)),
+        )
+        .expect("failed to create parallel page OCR engine");
+        let batch_engine = OcrEngine::new(
+            suite.det_path,
+            suite.rec_path,
+            suite.charset_path,
+            Some(bench_config(false)),
+        )
+        .expect("failed to create batch page OCR engine");
+
+        group.bench_with_input(
+            BenchmarkId::new("parallel_direct_exact", suite.label),
+            &suite,
+            |b, _| {
+                b.iter(|| {
+                    let results = parallel_engine
+                        .recognize(black_box(&image))
+                        .expect("parallel page OCR failed");
+                    black_box(results);
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("batch_direct", suite.label),
+            &suite,
+            |b, _| {
+                b.iter(|| {
+                    let results = batch_engine
+                        .recognize(black_box(&image))
+                        .expect("batch page OCR failed");
+                    black_box(results);
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("legacy_crop_exact", suite.label),
+            &suite,
+            |b, _| {
+                b.iter(|| {
+                    black_box(legacy_exact_width_pipeline(
+                        &parallel_engine,
+                        black_box(&image),
+                    ));
+                });
+            },
+        );
     }
 
     group.finish();
@@ -341,6 +453,7 @@ criterion_group! {
         bench_detection,
         bench_recognition,
         bench_recognition_batch_scaling,
-        bench_full_pipeline
+        bench_full_pipeline,
+        bench_page_dispatch_regression
 }
 criterion_main!(benches);

@@ -112,19 +112,7 @@ fn main() {
             let mnn_source_dir = get_mnn_source(&manifest_dir_path);
 
             // Build MNN using cmake
-            let dst = build_mnn_with_cmake(
-                &mnn_source_dir,
-                &arch,
-                &os,
-                &target_env,
-                &debug,
-                coreml_enabled,
-                metal_enabled,
-                cuda_enabled,
-                opencl_enabled,
-                opengl_enabled,
-                vulkan_enabled,
-            );
+            let dst = build_mnn_with_cmake(&mnn_source_dir, &target, &debug, &features);
 
             // Include dirs: cmake output + MNN source
             let include_dir = vec![dst.join("include"), mnn_source_dir.join("include")];
@@ -172,18 +160,7 @@ fn main() {
     build_wrapper(&manifest_dir_path, &mnn_include_dir, &target, &link_mode);
 
     // Link libraries
-    link_libraries(
-        &mnn_lib_dir,
-        &target,
-        &link_mode,
-        &features,
-        coreml_enabled,
-        metal_enabled,
-        cuda_enabled,
-        opencl_enabled,
-        opengl_enabled,
-        vulkan_enabled,
-    );
+    link_libraries(&mnn_lib_dir, &target, &link_mode, &features);
 
     // Generate Rust bindings
     bind_gen(
@@ -200,7 +177,7 @@ fn main() {
 /// 1. MNN_INCLUDE_DIR environment variable
 /// 2. MNN_SOURCE_DIR/include (if MNN_SOURCE_DIR is set)
 /// 3. Local 3rd_party/MNN/include
-fn get_mnn_include_dirs(manifest_dir: &PathBuf) -> Vec<PathBuf> {
+fn get_mnn_include_dirs(manifest_dir: &Path) -> Vec<PathBuf> {
     // 1. Check MNN_INCLUDE_DIR
     if let Ok(include_dir) = env::var("MNN_INCLUDE_DIR") {
         let include_path = PathBuf::from(&include_dir);
@@ -373,7 +350,7 @@ fn remove_dynamic_libs(extract_dir: &Path) {
 fn download_file(url: &str, dest: &Path) {
     // Try curl first (available on all modern platforms)
     let status = Command::new("curl")
-        .args(&["--http1.1", "-L", "-f", "-s", "-o"])
+        .args(["--http1.1", "-L", "-f", "-s", "-o"])
         .arg(dest.to_str().unwrap())
         .arg(url)
         .status();
@@ -391,7 +368,7 @@ fn download_file(url: &str, dest: &Path) {
             dest.to_str().unwrap()
         );
         let status = Command::new("powershell")
-            .args(&["-NoProfile", "-Command", &ps_cmd])
+            .args(["-NoProfile", "-Command", &ps_cmd])
             .status();
         match status {
             Ok(s) if s.success() => return,
@@ -410,9 +387,9 @@ fn download_file(url: &str, dest: &Path) {
 /// Extract a .tar.gz archive.
 fn extract_tar_gz(archive: &Path, dest_dir: &Path) {
     let status = Command::new("tar")
-        .args(&["xzf"])
+        .args(["xzf"])
         .arg(archive.to_str().unwrap())
-        .args(&["-C"])
+        .args(["-C"])
         .arg(dest_dir.to_str().unwrap())
         .status()
         .expect("Failed to run tar");
@@ -432,7 +409,7 @@ fn extract_zip(archive: &Path, dest_dir: &Path) {
             dest_dir.to_str().unwrap()
         );
         let status = Command::new("powershell")
-            .args(&["-NoProfile", "-Command", &ps_cmd])
+            .args(["-NoProfile", "-Command", &ps_cmd])
             .status()
             .expect("Failed to run powershell");
         if !status.success() {
@@ -441,9 +418,9 @@ fn extract_zip(archive: &Path, dest_dir: &Path) {
     } else {
         // Fallback: unzip command
         let status = Command::new("unzip")
-            .args(&["-o", "-q"])
+            .args(["-o", "-q"])
             .arg(archive.to_str().unwrap())
-            .args(&["-d"])
+            .args(["-d"])
             .arg(dest_dir.to_str().unwrap())
             .status()
             .expect("Failed to run unzip");
@@ -458,7 +435,7 @@ fn extract_zip(archive: &Path, dest_dir: &Path) {
 /// 1. Environment variable MNN_SOURCE_DIR
 /// 2. Local 3rd_party/MNN directory
 /// 3. Clone from GitHub
-fn get_mnn_source(manifest_dir: &PathBuf) -> PathBuf {
+fn get_mnn_source(manifest_dir: &Path) -> PathBuf {
     // Check environment variable first
     if let Ok(mnn_dir) = env::var("MNN_SOURCE_DIR") {
         let mnn_path = PathBuf::from(mnn_dir);
@@ -492,7 +469,7 @@ fn get_mnn_source(manifest_dir: &PathBuf) -> PathBuf {
     fs::create_dir_all(&third_party_dir).expect("Failed to create 3rd_party directory");
 
     let status = Command::new("git")
-        .args(&[
+        .args([
             "clone",
             "--depth=1",
             "--branch=3.4.1",
@@ -518,18 +495,14 @@ fn get_mnn_source(manifest_dir: &PathBuf) -> PathBuf {
 }
 
 fn build_mnn_with_cmake(
-    mnn_source_dir: &PathBuf,
-    arch: &str,
-    os: &str,
-    target_env: &str,
+    mnn_source_dir: &Path,
+    target: &TargetInfo<'_>,
     debug: &str,
-    coreml_enabled: bool,
-    metal_enabled: bool,
-    cuda_enabled: bool,
-    opencl_enabled: bool,
-    opengl_enabled: bool,
-    vulkan_enabled: bool,
+    features: &BuildFeatures,
 ) -> PathBuf {
+    let arch = target.arch;
+    let os = target.os;
+    let target_env = target.env;
     let mut config = cmake::Config::new(mnn_source_dir);
 
     config
@@ -550,7 +523,7 @@ fn build_mnn_with_cmake(
         config.generator("NMake Makefiles");
         config.define("CMAKE_BUILD_TYPE", "Release");
         // Check if we're using static CRT
-        if env::var("CARGO_CFG_TARGET_FEATURE").map_or(false, |f| f.contains("crt-static")) {
+        if env::var("CARGO_CFG_TARGET_FEATURE").is_ok_and(|f| f.contains("crt-static")) {
             // MNN has a specific option for static CRT on Windows
             config.define("MNN_WIN_RUNTIME_MT", "ON");
 
@@ -658,32 +631,32 @@ fn build_mnn_with_cmake(
     }
 
     // CoreML (macOS/iOS only)
-    if coreml_enabled && matches!(os, "macos" | "ios") {
+    if features.coreml && matches!(os, "macos" | "ios") {
         config.define("MNN_COREML", "ON");
     }
 
     // Metal GPU (macOS/iOS only)
-    if metal_enabled && matches!(os, "macos" | "ios") {
+    if features.metal && matches!(os, "macos" | "ios") {
         config.define("MNN_METAL", "ON");
     }
 
     // CUDA GPU (Linux/Windows)
-    if cuda_enabled && matches!(os, "linux" | "windows") {
+    if features.cuda && matches!(os, "linux" | "windows") {
         config.define("MNN_CUDA", "ON");
     }
 
     // OpenCL GPU (cross-platform)
-    if opencl_enabled {
+    if features.opencl {
         config.define("MNN_OPENCL", "ON");
     }
 
     // OpenGL GPU (Android/Linux)
-    if opengl_enabled && matches!(os, "android" | "linux") {
+    if features.opengl && matches!(os, "android" | "linux") {
         config.define("MNN_OPENGL", "ON");
     }
 
     // Vulkan GPU (cross-platform)
-    if vulkan_enabled {
+    if features.vulkan {
         config.define("MNN_VULKAN", "ON");
     }
 
@@ -691,7 +664,7 @@ fn build_mnn_with_cmake(
 
     let dst = config.build();
 
-    if let Some(plan) = cuda_side_library_plan(os, cuda_enabled, MnnLinkMode::BuildFromSource) {
+    if let Some(plan) = cuda_side_library_plan(os, features.cuda, MnnLinkMode::BuildFromSource) {
         let source = dst.join(
             plan.build_relative_path
                 .expect("source-built CUDA library must have a build path"),
@@ -726,7 +699,7 @@ fn build_mnn_with_cmake(
 }
 
 fn build_wrapper(
-    manifest_dir: &PathBuf,
+    manifest_dir: &Path,
     mnn_include_dirs: &[PathBuf],
     target: &TargetInfo<'_>,
     link_mode: &MnnLinkMode,
@@ -769,12 +742,6 @@ fn link_libraries(
     target: &TargetInfo<'_>,
     link_mode: &MnnLinkMode,
     features: &BuildFeatures,
-    coreml_enabled: bool,
-    metal_enabled: bool,
-    cuda_enabled: bool,
-    opencl_enabled: bool,
-    opengl_enabled: bool,
-    vulkan_enabled: bool,
 ) {
     let os = target.os;
     // Add library search paths
@@ -823,7 +790,7 @@ fn link_libraries(
     }
 
     // CoreML frameworks
-    if coreml_enabled && matches!(os, "macos" | "ios") {
+    if features.coreml && matches!(os, "macos" | "ios") {
         println!("cargo:rustc-link-lib=framework=CoreML");
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rustc-link-lib=framework=Metal");
@@ -831,24 +798,24 @@ fn link_libraries(
     }
 
     // Metal frameworks
-    if metal_enabled && matches!(os, "macos" | "ios") {
+    if features.metal && matches!(os, "macos" | "ios") {
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rustc-link-lib=framework=Metal");
         println!("cargo:rustc-link-lib=framework=MetalPerformanceShaders");
     }
 
     // CUDA libraries
-    if cuda_enabled && matches!(os, "linux" | "windows") {
+    if features.cuda && matches!(os, "linux" | "windows") {
         println!("cargo:rustc-link-lib=cuda");
         println!("cargo:rustc-link-lib=cudart");
         println!("cargo:rustc-link-lib=cublas");
-        if let Some(plan) = cuda_side_library_plan(os, cuda_enabled, *link_mode) {
+        if let Some(plan) = cuda_side_library_plan(os, features.cuda, *link_mode) {
             println!("cargo:rustc-link-lib=dylib={}", plan.link_name);
         }
     }
 
     // OpenCL library
-    if opencl_enabled {
+    if features.opencl {
         if os == "macos" {
             println!("cargo:rustc-link-lib=framework=OpenCL");
         } else {
@@ -857,7 +824,7 @@ fn link_libraries(
     }
 
     // OpenGL libraries
-    if opengl_enabled && matches!(os, "android" | "linux") {
+    if features.opengl && matches!(os, "android" | "linux") {
         if os == "android" {
             println!("cargo:rustc-link-lib=GLESv3");
             println!("cargo:rustc-link-lib=EGL");
@@ -867,13 +834,13 @@ fn link_libraries(
     }
 
     // Vulkan library
-    if vulkan_enabled {
+    if features.vulkan {
         println!("cargo:rustc-link-lib=vulkan");
     }
 }
 
 fn bind_gen(
-    manifest_dir: &PathBuf,
+    manifest_dir: &Path,
     mnn_include_dirs: &[PathBuf],
     os: &str,
     arch: &str,

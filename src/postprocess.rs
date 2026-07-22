@@ -107,6 +107,7 @@ pub fn extract_boxes_from_mask(
 /// - `original_height`: Original image height
 /// - `min_area`: Minimum bounding box area
 /// - `box_threshold`: Bounding box score threshold
+#[allow(clippy::too_many_arguments)]
 pub fn extract_boxes_from_mask_with_padding(
     mask: &[u8],
     mask_width: u32,
@@ -135,6 +136,7 @@ pub fn extract_boxes_from_mask_with_padding(
 ///
 /// Core of DB algorithm is to perform unclip expansion on detected contours,
 /// because model output segmentation mask is usually smaller than actual text region.
+#[allow(clippy::too_many_arguments)]
 pub fn extract_boxes_with_unclip(
     mask: &[u8],
     mask_width: u32,

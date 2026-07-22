@@ -99,14 +99,32 @@ jobs:
           command: test
           args: --verbose ${{ matrix.os == 'windows-2022' && '--release' || '' }} --target ${{ matrix.target }}
 
+  clippy:
+    name: Clippy (strict)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: clippy
+
+      - name: Run strict Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
   performance-smoke:
     name: Performance smoke
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
       OCR_RS_PERF_TESTS: "1"
-      OCR_RS_PERF_ITERS: "2"
+      OCR_RS_PERF_ITERS: "3"
       OCR_RS_PERF_BATCH_SIZE: "8"
+      OCR_RS_PERF_REGRESSION_LIMIT: "1.15"
 
     steps:
       - uses: actions/checkout@v4
@@ -118,7 +136,17 @@ jobs:
           override: true
 
       - name: Run release performance smoke tests
-        run: cargo test --release --test performance_tests -- --nocapture --test-threads=1
+        run: |
+          set -o pipefail
+          cargo test --release --test performance_tests -- --nocapture --test-threads=1 2>&1 | tee performance-results.log
+
+      - name: Upload performance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-results-${{ github.sha }}
+          path: performance-results.log
+          retention-days: 14
 
       - name: Compile Criterion benchmarks
         run: cargo bench --bench bench_metrics --no-run

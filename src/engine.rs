@@ -12,6 +12,25 @@ use crate::ori::{OriModel, OriOptions};
 use crate::postprocess::TextBox;
 use crate::rec::{RecModel, RecOptions, RecognitionResult};
 
+const PARALLEL_RECOGNITION_MIN_REGIONS: usize = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RegionRecognitionStrategy {
+    Batch,
+    ExactWidthParallel,
+}
+
+fn select_region_recognition_strategy(
+    enable_parallel: bool,
+    region_count: usize,
+) -> RegionRecognitionStrategy {
+    if enable_parallel && region_count >= PARALLEL_RECOGNITION_MIN_REGIONS {
+        RegionRecognitionStrategy::ExactWidthParallel
+    } else {
+        RegionRecognitionStrategy::Batch
+    }
+}
+
 /// OCR result
 #[derive(Debug, Clone)]
 pub struct OcrResult_ {
@@ -49,7 +68,7 @@ pub struct OcrEngineConfig {
     pub rec_options: RecOptions,
     /// Orientation options (used when orientation model is enabled)
     pub ori_options: OriOptions,
-    /// Whether to enable parallel recognition (use rayon to process multiple text regions in parallel)
+    /// Whether to enable exact-width parallel recognition for multi-line images
     pub enable_parallel: bool,
     /// Minimum confidence threshold at result level (recognition results below this value will be filtered)
     pub min_result_confidence: f32,
@@ -117,8 +136,8 @@ impl OcrEngineConfig {
 
     /// Enable/disable parallel processing
     ///
-    /// Note: When multiple text regions are detected, use rayon for parallel recognition.
-    /// If MNN is already set to multi-threading, enabling this option may cause thread contention.
+    /// When at least five text regions are detected, preprocessing is parallelized and each
+    /// region keeps its exact tensor width to avoid padded batch inference.
     pub fn with_parallel(mut self, enable: bool) -> Self {
         self.enable_parallel = enable;
         self
@@ -404,9 +423,17 @@ impl OcrEngine {
             return Ok(Vec::new());
         }
 
-        // 2. Recognize directly from source image regions. This avoids materializing
-        // DynamicImage crops and a second resize before recognition preprocessing.
-        let rec_results = self.rec_model.recognize_regions(&corrected_image, &boxes)?;
+        // 2. Render regions directly into recognition tensors. Large pages use
+        // exact-width tensors to avoid padding every line to the widest region.
+        let rec_results =
+            match select_region_recognition_strategy(self.config.enable_parallel, boxes.len()) {
+                RegionRecognitionStrategy::Batch => {
+                    self.rec_model.recognize_regions(&corrected_image, &boxes)?
+                }
+                RegionRecognitionStrategy::ExactWidthParallel => self
+                    .rec_model
+                    .recognize_regions_exact_parallel(&corrected_image, &boxes)?,
+            };
 
         // 3. Combine results and filter low confidence
         let results: Vec<OcrResult_> = rec_results
@@ -485,6 +512,12 @@ pub struct OcrEngineBuilder {
     charset_path: Option<PathBuf>,
     ori_model_path: Option<PathBuf>,
     config: Option<OcrEngineConfig>,
+}
+
+impl Default for OcrEngineBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OcrEngineBuilder {
@@ -655,6 +688,22 @@ fn rotate_by_angle(image: &DynamicImage, angle: i32) -> DynamicImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parallel_strategy_uses_exact_width_only_for_multi_line_pages() {
+        assert_eq!(
+            select_region_recognition_strategy(true, 5),
+            RegionRecognitionStrategy::ExactWidthParallel
+        );
+        assert_eq!(
+            select_region_recognition_strategy(true, 4),
+            RegionRecognitionStrategy::Batch
+        );
+        assert_eq!(
+            select_region_recognition_strategy(false, 12),
+            RegionRecognitionStrategy::Batch
+        );
+    }
 
     #[test]
     fn test_ocr_result() {

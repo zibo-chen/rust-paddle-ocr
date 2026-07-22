@@ -99,7 +99,7 @@ cargo bench --bench bench_metrics
 OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture --test-threads=1
 ```
 
-GitHub Actions 会在 Ubuntu 上运行 release 模式 smoke 测试，并编译 Criterion 基准。smoke 测试会输出 `PERF_METRIC` 行，但不会用固定耗时阈值失败任务，因为托管 runner 的性能波动较大。
+GitHub Actions 会串行运行 release 模式测试，并将 `PERF_METRIC` 日志保存为 artifact。回归门禁会在同一 runner 上比较直通 exact-width 流水线与旧 crop 流水线；中位数比值超过 `OCR_RS_PERF_REGRESSION_LIMIT`（默认 `1.15`）时失败，因此不依赖不稳定的绝对耗时。
 
 兼容时会自动使用 CPU 预构建包或 Apple Metal 预构建包。启用预构建包未包含的 GPU feature 时，会自动从源码构建 MNN：
 

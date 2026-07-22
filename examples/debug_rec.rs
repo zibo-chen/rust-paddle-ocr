@@ -116,12 +116,10 @@ fn main() {
         }
 
         // CTC 解码规则
-        if max_idx != 0 && max_idx != prev_idx {
-            if max_idx < charset.len() {
-                let ch = charset[max_idx];
-                decoded_text.push(ch);
-                char_details.push((ch, score));
-            }
+        if max_idx != 0 && max_idx != prev_idx && max_idx < charset.len() {
+            let ch = charset[max_idx];
+            decoded_text.push(ch);
+            char_details.push((ch, score));
         }
 
         prev_idx = max_idx;

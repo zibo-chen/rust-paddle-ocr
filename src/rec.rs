@@ -6,6 +6,7 @@ use image::{DynamicImage, RgbImage};
 use imageproc::geometric_transformations::Projection;
 use imageproc::point::Point;
 use ndarray::{Array4, ArrayD, ArrayViewD, Axis};
+use rayon::prelude::*;
 use std::{borrow::Cow, path::Path};
 
 use crate::error::{OcrError, OcrResult};
@@ -347,6 +348,27 @@ impl RecModel {
         Ok(results)
     }
 
+    pub(crate) fn recognize_regions_exact_parallel(
+        &self,
+        image: &DynamicImage,
+        boxes: &[TextBox],
+    ) -> OcrResult<Vec<RecognitionResult>> {
+        if boxes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let source = image.to_rgb8();
+        boxes
+            .par_iter()
+            .map(|text_box| {
+                let input =
+                    self.preprocess_regions_batch(&source, std::slice::from_ref(text_box))?;
+                let output = self.engine.run_dynamic(input.view().into_dyn())?;
+                self.decode_output_view(output.view())
+            })
+            .collect()
+    }
+
     fn preprocess_regions_batch(
         &self,
         source: &RgbImage,
@@ -514,26 +536,24 @@ impl RecModel {
             }
 
             // CTC decoding rule: skip blank (index 0) and duplicate characters
-            if max_idx != 0 && max_idx != prev_idx {
-                if max_idx < self.charset.len() {
-                    let ch = self.charset[max_idx];
+            if max_idx != 0 && max_idx != prev_idx && max_idx < self.charset.len() {
+                let ch = self.charset[max_idx];
 
-                    // Use raw logit value as confidence (model output is already softmax probability)
-                    // For large character sets, softmax scores can be very small, so use max_prob directly
-                    let score = max_prob;
+                // Use raw logit value as confidence (model output is already softmax probability)
+                // For large character sets, softmax scores can be very small, so use max_prob directly
+                let score = max_prob;
 
-                    // Only filter out very low confidence characters
-                    let threshold = if Self::is_punctuation(ch) {
-                        self.options.punct_min_score
-                    } else {
-                        self.options.min_score
-                    };
+                // Only filter out very low confidence characters
+                let threshold = if Self::is_punctuation(ch) {
+                    self.options.punct_min_score
+                } else {
+                    self.options.min_score
+                };
 
-                    if score >= threshold {
-                        text.push(ch);
-                        score_sum += score;
-                        char_scores.push((ch, score));
-                    }
+                if score >= threshold {
+                    text.push(ch);
+                    score_sum += score;
+                    char_scores.push((ch, score));
                 }
             }
 

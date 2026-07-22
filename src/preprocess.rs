@@ -47,7 +47,7 @@ impl NormalizeParams {
 /// Calculate size to pad to (multiple of 32)
 #[inline]
 pub fn get_padded_size(size: u32) -> u32 {
-    ((size + 31) / 32) * 32
+    size.div_ceil(32) * 32
 }
 
 /// Scale image to specified maximum side length

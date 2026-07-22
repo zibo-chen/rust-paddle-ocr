@@ -99,7 +99,7 @@ CI 방식의 짧은 성능 smoke 테스트를 실행합니다.
 OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture --test-threads=1
 ```
 
-GitHub Actions 는 Ubuntu 에서 release 모드 smoke 테스트를 실행하고 Criterion 벤치마크를 컴파일합니다. smoke 테스트는 `PERF_METRIC` 행을 출력하지만, 호스팅 runner 의 성능 차이가 크기 때문에 고정 지연 시간 임계값으로 실패시키지는 않습니다.
+GitHub Actions 는 release 모드 테스트를 직렬로 실행하고 `PERF_METRIC` 로그를 artifact 로 저장합니다. 회귀 검사는 동일한 runner 에서 direct exact-width 파이프라인과 기존 crop 파이프라인을 비교하며, 중앙값 비율이 `OCR_RS_PERF_REGRESSION_LIMIT`(기본값 `1.15`)을 초과하면 실패하므로 불안정한 절대 지연 시간에 의존하지 않습니다.
 
 호환되는 경우 CPU 또는 Apple Metal 사전 빌드 MNN 이 자동으로 사용됩니다. 사전 빌드 패키지에 없는 GPU feature 를 활성화하면 MNN 을 소스에서 자동으로 빌드합니다.
 
