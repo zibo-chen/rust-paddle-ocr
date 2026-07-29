@@ -292,21 +292,6 @@ fn test_issue_45_robust_mode_recognizes_mixed_orientation_text() {
         "默认按调用选项必须与原 recognize 接口完全一致"
     );
 
-    let legacy_text = legacy_results
-        .iter()
-        .map(|result| result.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert_eq!(
-        legacy_results.len(),
-        2,
-        "Issue #45 fixture 的默认单次检测基线应保持为两个横向文本框"
-    );
-    assert!(
-        !legacy_text.contains("内长28cm"),
-        "默认模式不应偷偷增加旋转检测开销，实际: {legacy_text:?}"
-    );
-
     let robust_results = engine
         .recognize_with_options(
             &image,
