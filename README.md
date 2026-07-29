@@ -78,6 +78,25 @@ let rec = ocr_rs::OcrEngine::rec_only(
 )?;
 ```
 
+### Mixed horizontal and vertical text
+
+The existing `recognize` method keeps the original single-pass behavior. For
+images that mix horizontal text with text rotated by 90 or 270 degrees, enable
+the opt-in robust mode for that call:
+
+```rust
+use ocr_rs::{RecognizeOptions, RotatedTextMode};
+
+let options = RecognizeOptions::new()
+    .with_rotated_text_mode(RotatedTextMode::Robust);
+let results = engine.recognize_with_options(&image, &options)?;
+```
+
+Robust mode runs detection on 90° and 270° copies, maps recovered boxes back to
+the input coordinates, and recognizes only vertical candidates. This adds no
+work to existing `recognize` calls. `RotatedTextMode::DetectedOnly` is a lighter
+option when the normal detector already finds the vertical boxes.
+
 ## Build
 
 ```bash

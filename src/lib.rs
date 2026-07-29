@@ -117,21 +117,21 @@ pub mod det;
 pub mod engine;
 pub mod error;
 pub mod mnn;
+mod ori;
 pub mod postprocess;
 pub mod preprocess;
 pub mod rec;
-mod ori;
 
 // Re-export commonly used types
 pub use det::{DetModel, DetOptions, DetPrecisionMode};
 pub use engine::{
     ocr_file, DetOnlyEngine, OcrEngine, OcrEngineBuilder, OcrEngineConfig, OcrResult_,
-    RecOnlyEngine,
+    RecOnlyEngine, RecognizeOptions, RotatedTextMode,
 };
 pub use error::{OcrError, OcrResult};
 pub use mnn::{Backend, InferenceConfig, InferenceEngine, PrecisionMode};
-pub use postprocess::TextBox;
 pub use ori::{OriModel, OriOptions, OriPreprocessMode, OrientationResult};
+pub use postprocess::TextBox;
 pub use rec::{RecModel, RecOptions, RecognitionResult};
 
 /// Get library version

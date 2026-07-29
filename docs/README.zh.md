@@ -78,6 +78,23 @@ let rec = ocr_rs::OcrEngine::rec_only(
 )?;
 ```
 
+### 横向与竖向文字混排
+
+原有 `recognize` 方法保持单次检测的既有行为。图片中同时包含横向文字和旋转
+90°/270° 的文字时，可以只为本次调用显式启用 Robust 模式：
+
+```rust
+use ocr_rs::{RecognizeOptions, RotatedTextMode};
+
+let options = RecognizeOptions::new()
+    .with_rotated_text_mode(RotatedTextMode::Robust);
+let results = engine.recognize_with_options(&image, &options)?;
+```
+
+Robust 模式会额外检测旋转 90° 和 270° 的图像，将找回的文本框映射到输入图坐标，
+并且只识别竖向候选框。原有 `recognize` 调用不会增加任何推理开销。如果普通检测
+已经能找到竖向框，可以使用开销更低的 `RotatedTextMode::DetectedOnly`。
+
 ## 构建
 
 ```bash
