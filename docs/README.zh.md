@@ -137,7 +137,15 @@ assert!(Backend::Metal.is_available());
 
 如果链接的 MNN 没有注册所请求的后端，创建引擎会返回 `MnnError::BackendUnavailable`，不再静默回退到 CPU。
 
-`x86_64-pc-windows-gnu` 会从源码构建 MNN，需要 MinGW C/C++ 工具链。NVIDIA 的 Windows CUDA 工具链要求 MSVC；源码构建 CUDA 请使用 `x86_64-pc-windows-msvc`，或通过 `mnn-dynamic`/`mnn-static` 提供兼容的 MNN 库。
+`x86_64-pc-windows-gnu` 会从源码构建 MNN，需要 MinGW C/C++ 工具链。默认情况下，应用需要携带匹配的 MinGW 运行时 DLL。启用 `static-cpp-runtime` 可静态链接 libstdc++、libgcc 和 winpthreads，使生成的二进制文件不再依赖 MinGW 运行时 DLL：
+
+```bash
+cargo build --release --target x86_64-pc-windows-gnu --features static-cpp-runtime
+```
+
+NVIDIA 的 Windows CUDA 工具链要求 MSVC；源码构建 CUDA 请使用 `x86_64-pc-windows-msvc`，或通过 `mnn-dynamic`/`mnn-static` 提供兼容的 MNN 库。
+
+该 feature 只控制 `ocr-rs` 自身链接的运行时；通过 `mnn-dynamic` 提供的第三方 DLL 仍可能带有自己的 MinGW 运行时依赖。
 
 ## License
 

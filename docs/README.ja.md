@@ -120,7 +120,15 @@ assert!(Backend::Metal.is_available());
 
 リンクされた MNN に要求したバックエンドが登録されていない場合、CPU に暗黙でフォールバックせず、エンジン作成時に `MnnError::BackendUnavailable` を返します。
 
-`x86_64-pc-windows-gnu` は MNN をソースからビルドするため、MinGW C/C++ ツールチェーンが必要です。NVIDIA の Windows CUDA ツールチェーンには MSVC が必要です。CUDA のソースビルドには `x86_64-pc-windows-msvc` を使うか、`mnn-dynamic`/`mnn-static` で互換 MNN を指定してください。
+`x86_64-pc-windows-gnu` は MNN をソースからビルドするため、MinGW C/C++ ツールチェーンが必要です。デフォルトでは対応する MinGW ランタイム DLL の配布が必要です。`static-cpp-runtime` を有効にすると libstdc++、libgcc、winpthreads が静的リンクされ、生成されたバイナリは MinGW ランタイム DLL に依存しません。
+
+```bash
+cargo build --release --target x86_64-pc-windows-gnu --features static-cpp-runtime
+```
+
+NVIDIA の Windows CUDA ツールチェーンには MSVC が必要です。CUDA のソースビルドには `x86_64-pc-windows-msvc` を使うか、`mnn-dynamic`/`mnn-static` で互換 MNN を指定してください。
+
+この feature が制御するのは `ocr-rs` 自身がリンクするランタイムです。`mnn-dynamic` で指定した DLL には、独自の MinGW ランタイム依存関係が残る場合があります。
 
 ## License
 

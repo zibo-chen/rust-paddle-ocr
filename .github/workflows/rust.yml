@@ -91,6 +91,18 @@ jobs:
         with:
           command: build
           args: --verbose ${{ matrix.os == 'windows-2022' && '--release' || '' }} --target ${{ matrix.target }}
+
+      - name: Verify static MinGW runtime linking
+        if: contains(matrix.target, 'windows-gnu')
+        shell: bash
+        run: |
+          cargo build --verbose --target "${{ matrix.target }}" --features static-cpp-runtime
+          imports="$(x86_64-w64-mingw32-objdump -p "target/${{ matrix.target }}/debug/ocr_rs.dll" | sed -n 's/.*DLL Name: //p')"
+          echo "$imports"
+          if grep -Eiq 'libstdc\+\+|libgcc|libwinpthread|libssp|libgomp|libatomic|libquadmath' <<<"$imports"; then
+            echo "Static runtime build still imports a MinGW runtime DLL"
+            exit 1
+          fi
       
       - name: Run tests
         if: contains(matrix.target, 'x86_64') && !contains(matrix.target, 'windows-gnu')

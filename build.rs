@@ -6,8 +6,9 @@ use std::{env, fs};
 mod build_support;
 
 use build_support::{
-    cpp_runtime_library, cuda_side_library_plan, prebuilt_asset_name, select_link_mode,
-    should_link_mnn_whole_archive, uses_msvc_flags, BuildFeatures, MnnLinkMode, TargetInfo,
+    cpp_runtime_libraries, cuda_side_library_plan, prebuilt_asset_name, select_link_mode,
+    should_link_mnn_whole_archive, uses_msvc_flags, BuildFeatures, MnnLinkMode, NativeLinkKind,
+    TargetInfo,
 };
 
 /// MNN prebuilt version to download from GitHub releases
@@ -39,6 +40,7 @@ fn main() {
     let mnn_dynamic = env::var("CARGO_FEATURE_MNN_DYNAMIC").is_ok();
     let mnn_static = env::var("CARGO_FEATURE_MNN_STATIC").is_ok();
     let build_from_source = env::var("CARGO_FEATURE_BUILD_MNN_FROM_SOURCE").is_ok();
+    let static_cpp_runtime = env::var("CARGO_FEATURE_STATIC_CPP_RUNTIME").is_ok();
 
     let target = TargetInfo {
         os: &os,
@@ -56,6 +58,7 @@ fn main() {
         mnn_dynamic,
         mnn_static,
         build_from_source,
+        static_cpp_runtime,
     };
     let link_mode = select_link_mode(&target, &features)
         .unwrap_or_else(|error| panic!("Invalid MNN build configuration: {}", error));
@@ -744,6 +747,9 @@ fn link_libraries(
     features: &BuildFeatures,
 ) {
     let os = target.os;
+
+    emit_static_cpp_runtime_search_paths(target, features);
+
     // Add library search paths
     for dir in lib_dirs {
         println!("cargo:rustc-link-search=native={}", dir.display());
@@ -764,8 +770,11 @@ fn link_libraries(
     }
 
     // Link the C++ runtime after MNN so GNU static linking can resolve MNN's symbols.
-    if let Some(runtime) = cpp_runtime_library(target) {
-        println!("cargo:rustc-link-lib={}", runtime);
+    for library in cpp_runtime_libraries(target, features.static_cpp_runtime) {
+        match library.kind {
+            NativeLinkKind::Dynamic => println!("cargo:rustc-link-lib=dylib={}", library.name),
+            NativeLinkKind::Static => println!("cargo:rustc-link-lib=static={}", library.name),
+        }
     }
 
     // Other platform-specific system libraries
@@ -836,6 +845,52 @@ fn link_libraries(
     // Vulkan library
     if features.vulkan {
         println!("cargo:rustc-link-lib=vulkan");
+    }
+}
+
+fn emit_static_cpp_runtime_search_paths(target: &TargetInfo<'_>, features: &BuildFeatures) {
+    if target.os != "windows" || target.env != "gnu" || !features.static_cpp_runtime {
+        return;
+    }
+
+    let compiler = cc::Build::new().cpp(true).get_compiler();
+    let mut emitted = HashSet::new();
+
+    for library in cpp_runtime_libraries(target, true) {
+        if library.kind != NativeLinkKind::Static {
+            continue;
+        }
+
+        let archive_name = format!("lib{}.a", library.name);
+        let output = compiler
+            .to_command()
+            .arg(format!("-print-file-name={archive_name}"))
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("Failed to query MinGW C++ compiler for {archive_name}: {error}")
+            });
+
+        if !output.status.success() {
+            panic!(
+                "MinGW C++ compiler failed to locate {archive_name}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        let archive = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+        if !archive.is_absolute() || !archive.is_file() {
+            panic!(
+                "feature `static-cpp-runtime` requires {archive_name}, but the target C++ compiler could not locate it"
+            );
+        }
+
+        let directory = archive
+            .parent()
+            .expect("MinGW runtime archive should have a parent directory")
+            .to_path_buf();
+        if emitted.insert(directory.clone()) {
+            println!("cargo:rustc-link-search=native={}", directory.display());
+        }
     }
 }
 
