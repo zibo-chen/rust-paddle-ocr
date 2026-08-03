@@ -2,9 +2,9 @@
 mod build_support;
 
 use build_support::{
-    cpp_runtime_library, cuda_side_library_plan, prebuilt_asset_name, select_link_mode,
+    cpp_runtime_libraries, cuda_side_library_plan, prebuilt_asset_name, select_link_mode,
     should_link_mnn_whole_archive, uses_msvc_flags, BuildConfigError, BuildFeatures,
-    CudaSideLibraryPlan, MnnLinkMode, TargetInfo,
+    CudaSideLibraryPlan, MnnLinkMode, NativeLibrary, NativeLinkKind, TargetInfo,
 };
 
 fn target<'a>(os: &'a str, arch: &'a str, env: &'a str, triple: &'a str) -> TargetInfo<'a> {
@@ -249,14 +249,47 @@ fn cpu_only_and_windows_cuda_do_not_use_the_linux_cuda_side_library() {
 fn windows_gnu_explicitly_links_libstdcxx() {
     let target = target("windows", "x86_64", "gnu", "x86_64-pc-windows-gnu");
 
-    assert_eq!(cpp_runtime_library(&target), Some("stdc++"));
+    assert_eq!(
+        cpp_runtime_libraries(&target, false),
+        &[NativeLibrary {
+            name: "stdc++",
+            kind: NativeLinkKind::Dynamic,
+        }]
+    );
+}
+
+#[test]
+fn windows_gnu_can_statically_link_all_mingw_runtime_libraries() {
+    let target = target("windows", "x86_64", "gnu", "x86_64-pc-windows-gnu");
+
+    assert_eq!(
+        cpp_runtime_libraries(&target, true),
+        &[
+            NativeLibrary {
+                name: "stdc++",
+                kind: NativeLinkKind::Static,
+            },
+            NativeLibrary {
+                name: "gcc_eh",
+                kind: NativeLinkKind::Static,
+            },
+            NativeLibrary {
+                name: "gcc",
+                kind: NativeLinkKind::Static,
+            },
+            NativeLibrary {
+                name: "winpthread",
+                kind: NativeLinkKind::Static,
+            },
+        ]
+    );
 }
 
 #[test]
 fn windows_msvc_leaves_runtime_linking_to_msvc() {
     let target = target("windows", "x86_64", "msvc", "x86_64-pc-windows-msvc");
 
-    assert_eq!(cpp_runtime_library(&target), None);
+    assert!(cpp_runtime_libraries(&target, true).is_empty());
 }
 
 #[test]
@@ -265,7 +298,7 @@ fn existing_platform_cpp_runtime_choices_are_preserved() {
     let macos = target("macos", "aarch64", "", "aarch64-apple-darwin");
     let android = target("android", "aarch64", "", "aarch64-linux-android");
 
-    assert_eq!(cpp_runtime_library(&linux), Some("stdc++"));
-    assert_eq!(cpp_runtime_library(&macos), Some("c++"));
-    assert_eq!(cpp_runtime_library(&android), Some("c++_static"));
+    assert_eq!(cpp_runtime_libraries(&linux, true)[0].name, "stdc++");
+    assert_eq!(cpp_runtime_libraries(&macos, true)[0].name, "c++");
+    assert_eq!(cpp_runtime_libraries(&android, true)[0].name, "c++_static");
 }

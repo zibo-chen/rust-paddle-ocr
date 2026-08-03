@@ -45,6 +45,9 @@ mnn-dynamic = []
 # 使用预编译的 MNN 静态库，需设置 MNN_LIB_DIR 和 MNN_INCLUDE_DIR 环境变量
 mnn-static = []
 
+# 在 Windows GNU 上静态链接 MinGW C++/GCC/pthread 运行时，避免分发 MinGW DLL
+static-cpp-runtime = []
+
 # 可选特性
 async = ["tokio", "futures"]
 

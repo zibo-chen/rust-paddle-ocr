@@ -139,7 +139,15 @@ assert!(Backend::Metal.is_available());
 
 Engine creation returns `MnnError::BackendUnavailable` when the requested backend was not registered instead of silently falling back to CPU.
 
-`x86_64-pc-windows-gnu` builds MNN from source and requires a MinGW C/C++ toolchain. NVIDIA's Windows CUDA toolchain requires MSVC; use `x86_64-pc-windows-msvc` for source-built CUDA, or provide a compatible MNN library with `mnn-dynamic`/`mnn-static`.
+`x86_64-pc-windows-gnu` builds MNN from source and requires a MinGW C/C++ toolchain. By default, applications must distribute the matching MinGW runtime DLLs. Enable `static-cpp-runtime` to statically link libstdc++, libgcc, and winpthreads so the resulting binary does not depend on MinGW runtime DLLs:
+
+```bash
+cargo build --release --target x86_64-pc-windows-gnu --features static-cpp-runtime
+```
+
+NVIDIA's Windows CUDA toolchain requires MSVC; use `x86_64-pc-windows-msvc` for source-built CUDA, or provide a compatible MNN library with `mnn-dynamic`/`mnn-static`.
+
+This feature controls the runtime linked by `ocr-rs`; a user-supplied DLL selected with `mnn-dynamic` may still have its own MinGW runtime dependencies.
 
 ## License
 

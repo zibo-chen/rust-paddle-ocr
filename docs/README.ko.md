@@ -120,7 +120,15 @@ assert!(Backend::Metal.is_available());
 
 링크된 MNN 에 요청한 백엔드가 등록되어 있지 않으면 CPU 로 조용히 폴백하지 않고 엔진 생성 시 `MnnError::BackendUnavailable` 을 반환합니다.
 
-`x86_64-pc-windows-gnu` 는 MNN 을 소스에서 빌드하므로 MinGW C/C++ 툴체인이 필요합니다. NVIDIA Windows CUDA 툴체인은 MSVC 를 요구합니다. CUDA 소스 빌드에는 `x86_64-pc-windows-msvc` 를 사용하거나 `mnn-dynamic`/`mnn-static` 으로 호환 MNN 라이브러리를 제공하세요.
+`x86_64-pc-windows-gnu` 는 MNN 을 소스에서 빌드하므로 MinGW C/C++ 툴체인이 필요합니다. 기본적으로 애플리케이션과 함께 일치하는 MinGW 런타임 DLL을 배포해야 합니다. `static-cpp-runtime` 을 활성화하면 libstdc++, libgcc 및 winpthreads를 정적으로 링크하여 생성된 바이너리의 MinGW 런타임 DLL 의존성을 제거할 수 있습니다.
+
+```bash
+cargo build --release --target x86_64-pc-windows-gnu --features static-cpp-runtime
+```
+
+NVIDIA Windows CUDA 툴체인은 MSVC 를 요구합니다. CUDA 소스 빌드에는 `x86_64-pc-windows-msvc` 를 사용하거나 `mnn-dynamic`/`mnn-static` 으로 호환 MNN 라이브러리를 제공하세요.
+
+이 feature는 `ocr-rs` 자체가 링크하는 런타임만 제어합니다. `mnn-dynamic` 으로 제공한 DLL에는 자체 MinGW 런타임 의존성이 남아 있을 수 있습니다.
 
 ## License
 

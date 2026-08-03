@@ -28,6 +28,7 @@ pub struct BuildFeatures {
     pub mnn_dynamic: bool,
     pub mnn_static: bool,
     pub build_from_source: bool,
+    pub static_cpp_runtime: bool,
 }
 
 impl BuildFeatures {
@@ -176,12 +177,68 @@ pub fn uses_msvc_flags<'a>(target: &TargetInfo<'a>) -> Result<bool, BuildConfigE
     Ok(target.os == "windows" && target.env == "msvc")
 }
 
-pub fn cpp_runtime_library(target: &TargetInfo<'_>) -> Option<&'static str> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeLinkKind {
+    Dynamic,
+    Static,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeLibrary {
+    pub name: &'static str,
+    pub kind: NativeLinkKind,
+}
+
+const WINDOWS_GNU_STATIC_CPP_RUNTIME: &[NativeLibrary] = &[
+    NativeLibrary {
+        name: "stdc++",
+        kind: NativeLinkKind::Static,
+    },
+    NativeLibrary {
+        name: "gcc_eh",
+        kind: NativeLinkKind::Static,
+    },
+    NativeLibrary {
+        name: "gcc",
+        kind: NativeLinkKind::Static,
+    },
+    NativeLibrary {
+        name: "winpthread",
+        kind: NativeLinkKind::Static,
+    },
+];
+
+const WINDOWS_GNU_DYNAMIC_CPP_RUNTIME: &[NativeLibrary] = &[NativeLibrary {
+    name: "stdc++",
+    kind: NativeLinkKind::Dynamic,
+}];
+
+const LIBCXX_RUNTIME: &[NativeLibrary] = &[NativeLibrary {
+    name: "c++",
+    kind: NativeLinkKind::Dynamic,
+}];
+
+const LIBSTDCXX_RUNTIME: &[NativeLibrary] = &[NativeLibrary {
+    name: "stdc++",
+    kind: NativeLinkKind::Dynamic,
+}];
+
+const ANDROID_CPP_RUNTIME: &[NativeLibrary] = &[NativeLibrary {
+    name: "c++_static",
+    kind: NativeLinkKind::Static,
+}];
+
+pub fn cpp_runtime_libraries(
+    target: &TargetInfo<'_>,
+    static_cpp_runtime: bool,
+) -> &'static [NativeLibrary] {
     match (target.os, target.env) {
-        ("macos" | "ios", _) => Some("c++"),
-        ("linux", _) | ("windows", "gnu") => Some("stdc++"),
-        ("android", _) => Some("c++_static"),
-        _ => None,
+        ("windows", "gnu") if static_cpp_runtime => WINDOWS_GNU_STATIC_CPP_RUNTIME,
+        ("windows", "gnu") => WINDOWS_GNU_DYNAMIC_CPP_RUNTIME,
+        ("macos" | "ios", _) => LIBCXX_RUNTIME,
+        ("linux", _) => LIBSTDCXX_RUNTIME,
+        ("android", _) => ANDROID_CPP_RUNTIME,
+        _ => &[],
     }
 }
 
