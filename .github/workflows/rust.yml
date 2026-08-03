@@ -96,8 +96,9 @@ jobs:
         if: contains(matrix.target, 'windows-gnu')
         shell: bash
         run: |
-          cargo build --verbose --target "${{ matrix.target }}" --features static-cpp-runtime
-          imports="$(x86_64-w64-mingw32-objdump -p "target/${{ matrix.target }}/debug/ocr_rs.dll" | sed -n 's/.*DLL Name: //p')"
+          cargo build --verbose --target "${{ matrix.target }}" --example advanced
+          cargo build --verbose --target "${{ matrix.target }}" --features static-cpp-runtime --example advanced
+          imports="$(x86_64-w64-mingw32-objdump -p "target/${{ matrix.target }}/debug/examples/advanced.exe" | sed -n 's/.*DLL Name: //p')"
           echo "$imports"
           if grep -Eiq 'libstdc\+\+|libgcc|libwinpthread|libssp|libgomp|libatomic|libquadmath' <<<"$imports"; then
             echo "Static runtime build still imports a MinGW runtime DLL"
