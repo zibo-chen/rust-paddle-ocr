@@ -1,6 +1,6 @@
 [package]
 name = "ocr-rs"
-version = "2.4.0"
+version = "2.4.1"
 edition = "2021"
 authors = ["ChenZibo <qw.54@163.com>"]
 readme = "README.md"
