@@ -163,7 +163,9 @@ pub fn preprocess_for_det(
         let src_row = &rgb[y * w * 3..(y + 1) * w * 3];
         let dst_row = y * pad_w;
 
-        for (x, pixel) in src_row.chunks_exact(3).enumerate() {
+        let (pixels, remainder) = src_row.as_chunks::<3>();
+        debug_assert!(remainder.is_empty());
+        for (x, pixel) in pixels.iter().enumerate() {
             let dst = dst_row + x;
             data[dst] = pixel[0] as f32 * scales[0] + offsets[0];
             data[plane_size + dst] = pixel[1] as f32 * scales[1] + offsets[1];
@@ -215,7 +217,9 @@ pub fn preprocess_for_rec(
         let src_row = &rgb[y * w * 3..(y + 1) * w * 3];
         let dst_row = y * w;
 
-        for (x, pixel) in src_row.chunks_exact(3).enumerate() {
+        let (pixels, remainder) = src_row.as_chunks::<3>();
+        debug_assert!(remainder.is_empty());
+        for (x, pixel) in pixels.iter().enumerate() {
             let dst = dst_row + x;
             data[dst] = pixel[0] as f32 * scales[0] + offsets[0];
             data[plane_size + dst] = pixel[1] as f32 * scales[1] + offsets[1];
@@ -281,7 +285,9 @@ pub fn preprocess_batch_for_rec(
             let src_row = &rgb[y * w * 3..(y + 1) * w * 3];
             let dst_row = y * max_width;
 
-            for (x, pixel) in src_row.chunks_exact(3).enumerate() {
+            let (pixels, remainder) = src_row.as_chunks::<3>();
+            debug_assert!(remainder.is_empty());
+            for (x, pixel) in pixels.iter().enumerate() {
                 let dst = sample_offset + dst_row + x;
                 data[dst] = pixel[0] as f32 * scales[0] + offsets[0];
                 data[sample_offset + plane_size + dst_row + x] =
