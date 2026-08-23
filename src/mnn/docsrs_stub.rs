@@ -108,6 +108,18 @@ pub enum DataFormat {
     NHWC,
 }
 
+/// OpenCL memory representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GpuMemoryMode {
+    /// Let MNN select the OpenCL memory representation.
+    #[default]
+    Auto,
+    /// Store OpenCL tensors in buffers.
+    Buffer,
+    /// Store OpenCL tensors in images.
+    Image,
+}
+
 // ============== Configuration Types ==============
 
 /// Inference configuration
@@ -118,6 +130,7 @@ pub struct InferenceConfig {
     pub backend: Backend,
     pub use_cache: bool,
     pub data_format: DataFormat,
+    pub gpu_memory_mode: GpuMemoryMode,
 }
 
 impl Default for InferenceConfig {
@@ -128,6 +141,7 @@ impl Default for InferenceConfig {
             backend: Backend::CPU,
             use_cache: true,
             data_format: DataFormat::NCHW,
+            gpu_memory_mode: GpuMemoryMode::Auto,
         }
     }
 }
@@ -153,6 +167,12 @@ impl InferenceConfig {
     /// Set the backend
     pub fn with_backend(mut self, backend: Backend) -> Self {
         self.backend = backend;
+        self
+    }
+
+    /// Set the OpenCL tensor memory representation.
+    pub fn with_gpu_memory_mode(mut self, mode: GpuMemoryMode) -> Self {
+        self.gpu_memory_mode = mode;
         self
     }
 

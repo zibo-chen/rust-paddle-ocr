@@ -42,6 +42,7 @@ extern "C"
         bool use_cache;         // Whether to use cache file
         int32_t data_format;    // Input/Output data format
         int32_t forward_type;   // MNNForwardType: 0=CPU, 1=Metal, 2=CUDA, 3=OpenCL, 6=OpenGL, 7=Vulkan, 5=CoreML/NNAPI
+        int32_t gpu_mode;       // MNNGpuMode bitmask for OpenCL/Vulkan; 0 for CPU and other backends
     } MNNR_Config;
 
     // ============== Version & Info ==============

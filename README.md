@@ -139,6 +139,8 @@ assert!(Backend::Metal.is_available());
 
 Engine creation returns `MnnError::BackendUnavailable` when the requested backend was not registered instead of silently falling back to CPU.
 
+`OcrEngineConfig` uses OpenCL buffer memory by default so very wide text regions do not exceed the GPU's 2D image-width limit. Advanced users can override this with `with_gpu_memory_mode(GpuMemoryMode::Auto)` or `GpuMemoryMode::Image`; the setting is ignored by non-OpenCL backends.
+
 `x86_64-pc-windows-gnu` builds MNN from source and requires a MinGW C/C++ toolchain. By default, applications must distribute the matching MinGW runtime DLLs. Enable `static-cpp-runtime` to statically link libstdc++, libgcc, and winpthreads so the resulting binary does not depend on MinGW runtime DLLs:
 
 ```bash

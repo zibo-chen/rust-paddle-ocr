@@ -120,6 +120,8 @@ assert!(Backend::Metal.is_available());
 
 リンクされた MNN に要求したバックエンドが登録されていない場合、CPU に暗黙でフォールバックせず、エンジン作成時に `MnnError::BackendUnavailable` を返します。
 
+`OcrEngineConfig` は OpenCL で既定として buffer memory を使用し、極端に幅広いテキスト領域が GPU の 2D image 幅上限を超えることを防ぎます。上級ユーザーは `with_gpu_memory_mode(GpuMemoryMode::Auto)` または `GpuMemoryMode::Image` で上書きできます。この設定は OpenCL 以外のバックエンドでは無視されます。
+
 `x86_64-pc-windows-gnu` は MNN をソースからビルドするため、MinGW C/C++ ツールチェーンが必要です。デフォルトでは対応する MinGW ランタイム DLL の配布が必要です。`static-cpp-runtime` を有効にすると libstdc++、libgcc、winpthreads が静的リンクされ、生成されたバイナリは MinGW ランタイム DLL に依存しません。
 
 ```bash

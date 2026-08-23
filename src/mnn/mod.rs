@@ -102,6 +102,19 @@ mod normal_impl {
         Auto = 2,
     }
 
+    /// OpenCL memory representation.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[repr(i32)]
+    pub enum GpuMemoryMode {
+        /// Let MNN select the OpenCL memory representation.
+        #[default]
+        Auto = 0,
+        /// Store OpenCL tensors in buffers, avoiding 2D image dimension limits.
+        Buffer = 1 << 6,
+        /// Store OpenCL tensors in images.
+        Image = 1 << 7,
+    }
+
     /// Inference backend type
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
     pub enum Backend {
@@ -176,6 +189,8 @@ mod normal_impl {
         pub data_format: DataFormat,
         /// Inference backend
         pub backend: Backend,
+        /// OpenCL tensor memory representation; ignored by other backends
+        pub gpu_memory_mode: GpuMemoryMode,
     }
 
     impl Default for InferenceConfig {
@@ -186,6 +201,7 @@ mod normal_impl {
                 use_cache: false,
                 data_format: DataFormat::NCHW,
                 backend: Backend::CPU,
+                gpu_memory_mode: GpuMemoryMode::Auto,
             }
         }
     }
@@ -214,6 +230,12 @@ mod normal_impl {
             self
         }
 
+        /// Set the OpenCL tensor memory representation.
+        pub fn with_gpu_memory_mode(mut self, mode: GpuMemoryMode) -> Self {
+            self.gpu_memory_mode = mode;
+            self
+        }
+
         /// Set data format
         pub fn with_data_format(mut self, format: DataFormat) -> Self {
             self.data_format = format;
@@ -227,6 +249,11 @@ mod normal_impl {
                 use_cache: self.use_cache,
                 data_format: self.data_format as i32,
                 forward_type: self.backend.to_forward_type(),
+                gpu_mode: match self.backend {
+                    Backend::OpenCL => (1 << 2) | self.gpu_memory_mode as i32,
+                    Backend::Vulkan => 1 << 2,
+                    _ => 0,
+                },
             }
         }
     }
@@ -775,11 +802,32 @@ mod normal_impl {
             let config = InferenceConfig::new()
                 .with_threads(8)
                 .with_precision(PrecisionMode::High)
-                .with_backend(Backend::Metal);
+                .with_backend(Backend::OpenCL)
+                .with_gpu_memory_mode(GpuMemoryMode::Buffer);
 
             assert_eq!(config.thread_count, 8);
             assert_eq!(config.precision_mode, PrecisionMode::High);
-            assert_eq!(config.backend, Backend::Metal);
+            assert_eq!(config.backend, Backend::OpenCL);
+            assert_eq!(config.gpu_memory_mode, GpuMemoryMode::Buffer);
+        }
+
+        #[test]
+        fn ffi_config_uses_threads_for_cpu_and_gpu_mode_for_opencl() {
+            let cpu = InferenceConfig::new().with_threads(8).to_ffi();
+            assert_eq!(cpu.thread_count, 8);
+            assert_eq!(cpu.gpu_mode, 0);
+
+            let opencl = InferenceConfig::new()
+                .with_backend(Backend::OpenCL)
+                .with_gpu_memory_mode(GpuMemoryMode::Buffer)
+                .to_ffi();
+            assert_eq!(opencl.gpu_mode, 68);
+
+            let vulkan = InferenceConfig::new()
+                .with_backend(Backend::Vulkan)
+                .with_gpu_memory_mode(GpuMemoryMode::Buffer)
+                .to_ffi();
+            assert_eq!(vulkan.gpu_mode, 4);
         }
 
         #[test]

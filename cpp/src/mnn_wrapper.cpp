@@ -90,10 +90,18 @@ struct MNN_SessionPool
 static void init_schedule_config(MNN::ScheduleConfig &schedule, MNN::BackendConfig &backend, const MNNR_Config *config)
 {
     schedule.type = (config) ? static_cast<MNNForwardType>(config->forward_type) : MNN_FORWARD_CPU;
-    schedule.numThread = config ? config->thread_count : 4;
-    if (schedule.numThread <= 0)
+    if (config && config->gpu_mode != 0 &&
+        (schedule.type == MNN_FORWARD_OPENCL || schedule.type == MNN_FORWARD_VULKAN))
     {
-        schedule.numThread = 4;
+        schedule.mode = config->gpu_mode;
+    }
+    else
+    {
+        schedule.numThread = config ? config->thread_count : 4;
+        if (schedule.numThread <= 0)
+        {
+            schedule.numThread = 4;
+        }
     }
 
     if (config)
@@ -178,22 +186,7 @@ MNN_SharedRuntime *mnnr_create_runtime(const MNNR_Config *config)
 
     runtime->precision_mode = config ? config->precision_mode : 0;
 
-    runtime->schedule_config.type = (config) ? static_cast<MNNForwardType>(config->forward_type) : MNN_FORWARD_CPU;
-    runtime->schedule_config.numThread = runtime->thread_count;
-
-    switch (runtime->precision_mode)
-    {
-    case 1:
-        runtime->backend_config.precision = MNN::BackendConfig::Precision_Low;
-        break;
-    case 2:
-        runtime->backend_config.precision = MNN::BackendConfig::Precision_High;
-        break;
-    default:
-        runtime->backend_config.precision = MNN::BackendConfig::Precision_Normal;
-        break;
-    }
-    runtime->schedule_config.backendConfig = &runtime->backend_config;
+    init_schedule_config(runtime->schedule_config, runtime->backend_config, config);
 
     return runtime;
 }

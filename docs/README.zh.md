@@ -137,6 +137,8 @@ assert!(Backend::Metal.is_available());
 
 如果链接的 MNN 没有注册所请求的后端，创建引擎会返回 `MnnError::BackendUnavailable`，不再静默回退到 CPU。
 
+`OcrEngineConfig` 默认对 OpenCL 使用 buffer memory，避免超宽文本区域超过 GPU 的二维 image 宽度上限。高级用户可通过 `with_gpu_memory_mode(GpuMemoryMode::Auto)` 或 `GpuMemoryMode::Image` 覆盖；非 OpenCL 后端会忽略该配置。
+
 `x86_64-pc-windows-gnu` 会从源码构建 MNN，需要 MinGW C/C++ 工具链。默认情况下，应用需要携带匹配的 MinGW 运行时 DLL。启用 `static-cpp-runtime` 可静态链接 libstdc++、libgcc 和 winpthreads，使生成的二进制文件不再依赖 MinGW 运行时 DLL：
 
 ```bash

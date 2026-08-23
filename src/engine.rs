@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::det::{DetModel, DetOptions};
 use crate::error::{OcrError, OcrResult};
-use crate::mnn::{Backend, InferenceConfig, PrecisionMode};
+use crate::mnn::{Backend, GpuMemoryMode, InferenceConfig, PrecisionMode};
 use crate::ori::{OriModel, OriOptions};
 use crate::postprocess::{compute_iou, TextBox};
 use crate::rec::{RecModel, RecOptions, RecognitionResult};
@@ -132,6 +132,8 @@ impl OcrResult_ {
 pub struct OcrEngineConfig {
     /// Inference backend
     pub backend: Backend,
+    /// OpenCL tensor memory representation
+    pub gpu_memory_mode: GpuMemoryMode,
     /// Thread count
     pub thread_count: i32,
     /// Precision mode
@@ -154,6 +156,7 @@ impl Default for OcrEngineConfig {
     fn default() -> Self {
         Self {
             backend: Backend::CPU,
+            gpu_memory_mode: GpuMemoryMode::Buffer,
             thread_count: 4,
             precision_mode: PrecisionMode::Normal,
             det_options: DetOptions::default(),
@@ -175,6 +178,12 @@ impl OcrEngineConfig {
     /// Set inference backend
     pub fn with_backend(mut self, backend: Backend) -> Self {
         self.backend = backend;
+        self
+    }
+
+    /// Set the OpenCL tensor memory representation.
+    pub fn with_gpu_memory_mode(mut self, mode: GpuMemoryMode) -> Self {
+        self.gpu_memory_mode = mode;
         self
     }
 
@@ -264,6 +273,7 @@ impl OcrEngineConfig {
             thread_count: self.thread_count,
             precision_mode: self.precision_mode,
             backend: self.backend,
+            gpu_memory_mode: self.gpu_memory_mode,
             ..Default::default()
         }
     }
@@ -1098,6 +1108,16 @@ mod tests {
             .with_vertical_aspect_ratio(0.5);
 
         assert_eq!(options.vertical_aspect_ratio(), 2.0);
+    }
+
+    #[test]
+    fn ocr_config_defaults_to_buffer_memory_for_opencl() {
+        let config = OcrEngineConfig::new().with_backend(Backend::OpenCL);
+        assert_eq!(config.gpu_memory_mode, GpuMemoryMode::Buffer);
+        assert_eq!(
+            config.to_inference_config().gpu_memory_mode,
+            GpuMemoryMode::Buffer
+        );
     }
 
     #[test]
