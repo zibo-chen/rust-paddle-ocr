@@ -125,14 +125,14 @@ pub mod rec;
 // Re-export commonly used types
 pub use det::{DetModel, DetOptions, DetPrecisionMode};
 pub use engine::{
-    ocr_file, DetOnlyEngine, OcrEngine, OcrEngineBuilder, OcrEngineConfig, OcrResult_,
-    RecOnlyEngine, RecognizeOptions, RotatedTextMode,
+    ocr_file, AlignedOcrResult, DetOnlyEngine, OcrCharacter, OcrEngine, OcrEngineBuilder,
+    OcrEngineConfig, OcrResult_, RecOnlyEngine, RecognizeOptions, RotatedTextMode,
 };
 pub use error::{OcrError, OcrResult};
 pub use mnn::{Backend, GpuMemoryMode, InferenceConfig, InferenceEngine, PrecisionMode};
 pub use ori::{OriModel, OriOptions, OriPreprocessMode, OrientationResult};
 pub use postprocess::TextBox;
-pub use rec::{RecModel, RecOptions, RecognitionResult};
+pub use rec::{AlignedRecognitionResult, CharacterSpan, RecModel, RecOptions, RecognitionResult};
 
 /// Get library version
 pub fn version() -> &'static str {

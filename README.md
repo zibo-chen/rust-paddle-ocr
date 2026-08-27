@@ -97,6 +97,25 @@ the input coordinates, and recognizes only vertical candidates. This adds no
 work to existing `recognize` calls. `RotatedTextMode::DetectedOnly` is a lighter
 option when the normal detector already finds the vertical boxes.
 
+### Character alignment
+
+Use the additive alignment API when an image UI needs character hit testing or
+selection geometry:
+
+```rust
+let results = engine.recognize_with_options_and_alignment(&image, &options)?;
+for line in results {
+    for character in line.characters {
+        println!("{}: {:?}", character.character, character.points);
+    }
+}
+```
+
+The four source-image points for each character are derived from the
+recognition model's CTC time steps and the detected text quadrilateral. This
+does not run an additional inference pass. The existing `RecognitionResult`,
+`OcrResult_`, `recognize`, and `recognize_with_options` APIs are unchanged.
+
 ## Build
 
 ```bash

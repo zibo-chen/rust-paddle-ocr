@@ -12,7 +12,9 @@ use crate::error::{OcrError, OcrResult};
 use crate::mnn::{Backend, GpuMemoryMode, InferenceConfig, PrecisionMode};
 use crate::ori::{OriModel, OriOptions};
 use crate::postprocess::{compute_iou, TextBox};
-use crate::rec::{RecModel, RecOptions, RecognitionResult};
+use crate::rec::{
+    AlignedRecognitionResult, CharacterSpan, RecModel, RecOptions, RecognitionResult,
+};
 
 const PARALLEL_RECOGNITION_MIN_REGIONS: usize = 5;
 const ROTATED_RESULT_IOU_THRESHOLD: f32 = 0.5;
@@ -125,6 +127,34 @@ impl OcrResult_ {
             bbox,
         }
     }
+}
+
+/// One recognized character projected back into source-image coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OcrCharacter {
+    /// Recognized Unicode scalar value.
+    pub character: char,
+    /// Confidence score emitted for this character.
+    pub confidence: f32,
+    /// Character quadrilateral in recognition order: start-top, end-top,
+    /// end-bottom, start-bottom.
+    pub points: [Point<f32>; 4],
+}
+
+/// OCR result with per-character geometry.
+///
+/// This is intentionally separate from [`OcrResult_`] so the alignment API is
+/// additive and existing struct literals and destructuring remain compatible.
+#[derive(Debug, Clone)]
+pub struct AlignedOcrResult {
+    /// Recognized text.
+    pub text: String,
+    /// Confidence score.
+    pub confidence: f32,
+    /// Detected text-region bounding box.
+    pub bbox: TextBox,
+    /// Character quadrilaterals in the same order as `text`.
+    pub characters: Vec<OcrCharacter>,
 }
 
 /// OCR engine configuration
@@ -496,6 +526,18 @@ impl OcrEngine {
         self.recognize_with_options(image, &RecognizeOptions::default())
     }
 
+    /// Perform complete OCR recognition and retain per-character geometry.
+    ///
+    /// This method runs the same models as [`Self::recognize`]; alignment is
+    /// derived from CTC decoder time steps and does not add another inference
+    /// pass.
+    pub fn recognize_with_alignment(
+        &self,
+        image: &DynamicImage,
+    ) -> OcrResult<Vec<AlignedOcrResult>> {
+        self.recognize_with_options_and_alignment(image, &RecognizeOptions::default())
+    }
+
     /// Perform OCR recognition with per-call options.
     ///
     /// [`RotatedTextMode::Disabled`] is the default and runs the same one-pass
@@ -523,6 +565,119 @@ impl OcrEngine {
                 self.recognize_robust(&corrected_image, options.vertical_aspect_ratio)
             }
         }
+    }
+
+    /// Perform OCR recognition with per-call options and per-character source
+    /// geometry. Existing option and result APIs remain unchanged.
+    pub fn recognize_with_options_and_alignment(
+        &self,
+        image: &DynamicImage,
+        options: &RecognizeOptions,
+    ) -> OcrResult<Vec<AlignedOcrResult>> {
+        let corrected_image = if let Some(ori_model) = self.ori_model.as_ref() {
+            self.correct_orientation_with_model(ori_model, image.clone())
+        } else {
+            image.clone()
+        };
+
+        match options.rotated_text_mode {
+            RotatedTextMode::Disabled => {
+                self.recognize_single_pass_with_alignment(&corrected_image)
+            }
+            RotatedTextMode::DetectedOnly => self.recognize_detected_text_with_alignment(
+                &corrected_image,
+                options.vertical_aspect_ratio,
+            ),
+            RotatedTextMode::Robust => self
+                .recognize_robust_with_alignment(&corrected_image, options.vertical_aspect_ratio),
+        }
+    }
+
+    fn recognize_single_pass_with_alignment(
+        &self,
+        image: &DynamicImage,
+    ) -> OcrResult<Vec<AlignedOcrResult>> {
+        let boxes = self.det_model.detect_expanded(image)?;
+        if boxes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rec_results = self.recognize_regions_with_alignment(image, &boxes)?;
+        Ok(self.combine_aligned_results(rec_results, boxes.clone(), boxes))
+    }
+
+    fn recognize_detected_text_with_alignment(
+        &self,
+        image: &DynamicImage,
+        vertical_aspect_ratio: f32,
+    ) -> OcrResult<Vec<AlignedOcrResult>> {
+        let boxes = self.det_model.detect_expanded(image)?;
+        if boxes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut rec_results = self.recognize_regions_with_alignment(image, &boxes)?;
+        let mut alignment_boxes = boxes.clone();
+        for (index, text_box) in boxes.iter().enumerate() {
+            if !is_vertical_box(text_box, vertical_aspect_ratio) {
+                continue;
+            }
+
+            let variants = vertical_recognition_variants(text_box);
+            let variant_results = self
+                .rec_model
+                .recognize_regions_with_alignment(image, &variants)?;
+            if let Some((best, best_box)) = variant_results
+                .into_iter()
+                .zip(variants)
+                .max_by(|(a, _), (b, _)| a.confidence.total_cmp(&b.confidence))
+            {
+                if best.confidence > rec_results[index].confidence {
+                    rec_results[index] = best;
+                    alignment_boxes[index] = best_box;
+                }
+            }
+        }
+
+        Ok(self.combine_aligned_results(rec_results, boxes, alignment_boxes))
+    }
+
+    fn recognize_robust_with_alignment(
+        &self,
+        image: &DynamicImage,
+        vertical_aspect_ratio: f32,
+    ) -> OcrResult<Vec<AlignedOcrResult>> {
+        let mut results =
+            self.recognize_detected_text_with_alignment(image, vertical_aspect_ratio)?;
+        let (original_width, original_height) = image.dimensions();
+
+        for turn in [QuarterTurn::Clockwise90, QuarterTurn::Clockwise270] {
+            let rotated_image = turn.rotate(image);
+            let rotated_boxes = self
+                .det_model
+                .detect_expanded(&rotated_image)?
+                .into_iter()
+                .filter(|text_box| is_horizontal_box(text_box, vertical_aspect_ratio))
+                .collect::<Vec<_>>();
+            if rotated_boxes.is_empty() {
+                continue;
+            }
+
+            let rec_results =
+                self.recognize_regions_with_alignment(&rotated_image, &rotated_boxes)?;
+            let rotated_results = self
+                .combine_aligned_results(rec_results, rotated_boxes.clone(), rotated_boxes)
+                .into_iter()
+                .map(|result| {
+                    turn.map_aligned_result_to_original(result, original_width, original_height)
+                });
+            for result in rotated_results {
+                merge_spatial_aligned_result(&mut results, result);
+            }
+        }
+
+        sort_aligned_results_by_reading_order(&mut results);
+        Ok(results)
     }
 
     fn recognize_single_pass(&self, image: &DynamicImage) -> OcrResult<Vec<OcrResult_>> {
@@ -628,6 +783,21 @@ impl OcrEngine {
         }
     }
 
+    fn recognize_regions_with_alignment(
+        &self,
+        image: &DynamicImage,
+        boxes: &[TextBox],
+    ) -> OcrResult<Vec<AlignedRecognitionResult>> {
+        match select_region_recognition_strategy(self.config.enable_parallel, boxes.len()) {
+            RegionRecognitionStrategy::Batch => self
+                .rec_model
+                .recognize_regions_with_alignment(image, boxes),
+            RegionRecognitionStrategy::ExactWidthParallel => self
+                .rec_model
+                .recognize_regions_exact_parallel_with_alignment(image, boxes),
+        }
+    }
+
     fn combine_results(
         &self,
         rec_results: Vec<RecognitionResult>,
@@ -640,6 +810,23 @@ impl OcrEngine {
                 !rec.text.is_empty() && rec.confidence >= self.config.min_result_confidence
             })
             .map(|(rec, bbox)| OcrResult_::new(rec.text, rec.confidence, bbox))
+            .collect()
+    }
+
+    fn combine_aligned_results(
+        &self,
+        rec_results: Vec<AlignedRecognitionResult>,
+        boxes: Vec<TextBox>,
+        alignment_boxes: Vec<TextBox>,
+    ) -> Vec<AlignedOcrResult> {
+        rec_results
+            .into_iter()
+            .zip(boxes)
+            .zip(alignment_boxes)
+            .filter(|((rec, _), _)| {
+                !rec.text.is_empty() && rec.confidence >= self.config.min_result_confidence
+            })
+            .map(|((rec, bbox), alignment_box)| aligned_ocr_result(rec, bbox, &alignment_box))
             .collect()
     }
 
@@ -742,6 +929,83 @@ impl QuarterTurn {
 
         TextBox::with_points(rect, text_box.score, points)
     }
+
+    fn map_point_to_original(
+        self,
+        point: Point<f32>,
+        original_width: u32,
+        original_height: u32,
+    ) -> Point<f32> {
+        let mapped = match self {
+            Self::Clockwise90 => {
+                Point::new(point.y, original_height.saturating_sub(1) as f32 - point.x)
+            }
+            Self::Clockwise270 => {
+                Point::new(original_width.saturating_sub(1) as f32 - point.y, point.x)
+            }
+        };
+        Point::new(
+            mapped.x.clamp(0.0, original_width.saturating_sub(1) as f32),
+            mapped
+                .y
+                .clamp(0.0, original_height.saturating_sub(1) as f32),
+        )
+    }
+
+    fn map_aligned_result_to_original(
+        self,
+        mut result: AlignedOcrResult,
+        original_width: u32,
+        original_height: u32,
+    ) -> AlignedOcrResult {
+        result.bbox = self.map_box_to_original(&result.bbox, original_width, original_height);
+        for character in &mut result.characters {
+            character.points = character
+                .points
+                .map(|point| self.map_point_to_original(point, original_width, original_height));
+        }
+        result
+    }
+}
+
+fn aligned_ocr_result(
+    recognition: AlignedRecognitionResult,
+    bbox: TextBox,
+    alignment_box: &TextBox,
+) -> AlignedOcrResult {
+    let characters = recognition
+        .characters
+        .into_iter()
+        .map(|span| OcrCharacter {
+            character: span.character,
+            confidence: span.confidence,
+            points: character_quad(alignment_box, &span),
+        })
+        .collect();
+    AlignedOcrResult {
+        text: recognition.text,
+        confidence: recognition.confidence,
+        bbox,
+        characters,
+    }
+}
+
+fn character_quad(text_box: &TextBox, span: &CharacterSpan) -> [Point<f32>; 4] {
+    let [start_top, end_top, end_bottom, start_bottom] = text_box_points(text_box);
+    [
+        lerp_point(start_top, end_top, span.start),
+        lerp_point(start_top, end_top, span.end),
+        lerp_point(start_bottom, end_bottom, span.end),
+        lerp_point(start_bottom, end_bottom, span.start),
+    ]
+}
+
+fn lerp_point(start: Point<f32>, end: Point<f32>, position: f32) -> Point<f32> {
+    let position = position.clamp(0.0, 1.0);
+    Point::new(
+        start.x + (end.x - start.x) * position,
+        start.y + (end.y - start.y) * position,
+    )
 }
 
 fn box_dimensions(text_box: &TextBox) -> (f32, f32) {
@@ -873,7 +1137,29 @@ fn merge_spatial_result(results: &mut Vec<OcrResult_>, candidate: OcrResult_) {
     }
 }
 
+fn merge_spatial_aligned_result(results: &mut Vec<AlignedOcrResult>, candidate: AlignedOcrResult) {
+    if let Some(existing) = results.iter_mut().find(|result| {
+        compute_iou(&result.bbox.rect, &candidate.bbox.rect) >= ROTATED_RESULT_IOU_THRESHOLD
+    }) {
+        if candidate.confidence > existing.confidence {
+            *existing = candidate;
+        }
+    } else {
+        results.push(candidate);
+    }
+}
+
 fn sort_results_by_reading_order(results: &mut [OcrResult_]) {
+    results.sort_by(|a, b| {
+        a.bbox
+            .rect
+            .top()
+            .cmp(&b.bbox.rect.top())
+            .then_with(|| a.bbox.rect.left().cmp(&b.bbox.rect.left()))
+    });
+}
+
+fn sort_aligned_results_by_reading_order(results: &mut [AlignedOcrResult]) {
     results.sort_by(|a, b| {
         a.bbox
             .rect
@@ -993,6 +1279,14 @@ impl RecOnlyEngine {
     /// Recognize a single image
     pub fn recognize(&self, image: &DynamicImage) -> OcrResult<RecognitionResult> {
         self.rec_model.recognize(image)
+    }
+
+    /// Recognize a single image and retain per-character CTC alignment.
+    pub fn recognize_with_alignment(
+        &self,
+        image: &DynamicImage,
+    ) -> OcrResult<AlignedRecognitionResult> {
+        self.rec_model.recognize_with_alignment(image)
     }
 
     /// Return text only
@@ -1176,5 +1470,35 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].text, "高");
         assert_eq!(results[0].confidence, 0.9);
+    }
+
+    #[test]
+    fn character_quad_interpolates_rotated_text_geometry() {
+        let text_box = TextBox::with_points(
+            Rect::at(10, 20).of_size(100, 30),
+            0.9,
+            [
+                Point::new(10.0, 20.0),
+                Point::new(110.0, 30.0),
+                Point::new(108.0, 60.0),
+                Point::new(8.0, 50.0),
+            ],
+        );
+        let span = CharacterSpan {
+            character: '中',
+            confidence: 0.95,
+            start: 0.25,
+            end: 0.5,
+        };
+
+        assert_eq!(
+            character_quad(&text_box, &span),
+            [
+                Point::new(35.0, 22.5),
+                Point::new(60.0, 25.0),
+                Point::new(58.0, 55.0),
+                Point::new(33.0, 52.5),
+            ]
+        );
     }
 }

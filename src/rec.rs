@@ -25,6 +25,46 @@ pub struct RecognitionResult {
     pub char_scores: Vec<(char, f32)>,
 }
 
+/// A recognized character and its horizontal position within the rectified
+/// text-line image.
+///
+/// `start` and `end` are normalized to `0.0..=1.0`, measured from the start of
+/// the recognition direction. They are derived from the model's CTC time-step
+/// alignment rather than from uniformly dividing the final string.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CharacterSpan {
+    /// Recognized Unicode scalar value.
+    pub character: char,
+    /// Confidence score emitted for this character.
+    pub confidence: f32,
+    /// Inclusive visual start, normalized to the rectified line width.
+    pub start: f32,
+    /// Exclusive visual end, normalized to the rectified line width.
+    pub end: f32,
+}
+
+/// Text recognition result with per-character CTC alignment.
+///
+/// This is a separate result type so adding alignment remains source
+/// compatible with code that constructs or destructures [`RecognitionResult`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlignedRecognitionResult {
+    /// Recognized text.
+    pub text: String,
+    /// Average confidence score (0.0 - 1.0).
+    pub confidence: f32,
+    /// Confidence score for each character.
+    pub char_scores: Vec<(char, f32)>,
+    /// Character positions in the same order as `text`.
+    pub characters: Vec<CharacterSpan>,
+}
+
+impl AlignedRecognitionResult {
+    fn into_legacy(self) -> RecognitionResult {
+        RecognitionResult::new(self.text, self.confidence, self.char_scores)
+    }
+}
+
 impl RecognitionResult {
     /// Create a new recognition result
     pub fn new(text: String, confidence: f32, char_scores: Vec<(char, f32)>) -> Self {
@@ -237,6 +277,16 @@ impl RecModel {
     /// # Returns
     /// Recognition result
     pub fn recognize(&self, image: &DynamicImage) -> OcrResult<RecognitionResult> {
+        self.recognize_with_alignment(image)
+            .map(AlignedRecognitionResult::into_legacy)
+    }
+
+    /// Recognize a single text-line image and retain per-character CTC
+    /// alignment. Existing callers can continue using [`Self::recognize`].
+    pub fn recognize_with_alignment(
+        &self,
+        image: &DynamicImage,
+    ) -> OcrResult<AlignedRecognitionResult> {
         // Preprocess
         let input = preprocess_for_rec(image, self.options.target_height, &self.normalize_params)?;
 
@@ -244,7 +294,7 @@ impl RecModel {
         let output = self.engine.run_dynamic(input.view().into_dyn())?;
 
         // Decode
-        self.decode_output_view(output.view())
+        self.decode_output_view_with_alignment(output.view(), 1.0)
     }
 
     /// Recognize a single image, return text only
@@ -319,6 +369,20 @@ impl RecModel {
         image: &DynamicImage,
         boxes: &[TextBox],
     ) -> OcrResult<Vec<RecognitionResult>> {
+        self.recognize_regions_with_alignment(image, boxes)
+            .map(|results| {
+                results
+                    .into_iter()
+                    .map(AlignedRecognitionResult::into_legacy)
+                    .collect()
+            })
+    }
+
+    pub(crate) fn recognize_regions_with_alignment(
+        &self,
+        image: &DynamicImage,
+        boxes: &[TextBox],
+    ) -> OcrResult<Vec<AlignedRecognitionResult>> {
         if boxes.is_empty() {
             return Ok(Vec::new());
         }
@@ -329,6 +393,7 @@ impl RecModel {
 
         for chunk in boxes.chunks(batch_size) {
             let batch_input = self.preprocess_regions_batch(&source, chunk)?;
+            let input_width = batch_input.shape()[3].max(1) as f32;
             let batch_output = self.engine.run_dynamic(batch_input.view().into_dyn())?;
 
             let shape = batch_output.shape();
@@ -339,9 +404,13 @@ impl RecModel {
                 )));
             }
 
-            for i in 0..shape[0] {
+            for (i, text_box) in chunk.iter().take(shape[0]).enumerate() {
                 let sample_output = batch_output.index_axis(Axis(0), i).into_dyn();
-                results.push(self.decode_output_view(sample_output)?);
+                let valid_width = region_target_width(text_box, self.options.target_height) as f32;
+                results.push(self.decode_output_view_with_alignment(
+                    sample_output,
+                    (valid_width / input_width).clamp(0.0, 1.0),
+                )?);
             }
         }
 
@@ -353,6 +422,20 @@ impl RecModel {
         image: &DynamicImage,
         boxes: &[TextBox],
     ) -> OcrResult<Vec<RecognitionResult>> {
+        self.recognize_regions_exact_parallel_with_alignment(image, boxes)
+            .map(|results| {
+                results
+                    .into_iter()
+                    .map(AlignedRecognitionResult::into_legacy)
+                    .collect()
+            })
+    }
+
+    pub(crate) fn recognize_regions_exact_parallel_with_alignment(
+        &self,
+        image: &DynamicImage,
+        boxes: &[TextBox],
+    ) -> OcrResult<Vec<AlignedRecognitionResult>> {
         if boxes.is_empty() {
             return Ok(Vec::new());
         }
@@ -364,7 +447,7 @@ impl RecModel {
                 let input =
                     self.preprocess_regions_batch(&source, std::slice::from_ref(text_box))?;
                 let output = self.engine.run_dynamic(input.view().into_dyn())?;
-                self.decode_output_view(output.view())
+                self.decode_output_view_with_alignment(output.view(), 1.0)
             })
             .collect()
     }
@@ -490,6 +573,15 @@ impl RecModel {
     }
 
     fn decode_output_view(&self, output: ArrayViewD<'_, f32>) -> OcrResult<RecognitionResult> {
+        self.decode_output_view_with_alignment(output, 1.0)
+            .map(AlignedRecognitionResult::into_legacy)
+    }
+
+    fn decode_output_view_with_alignment(
+        &self,
+        output: ArrayViewD<'_, f32>,
+        valid_width_ratio: f32,
+    ) -> OcrResult<AlignedRecognitionResult> {
         let shape = output.shape();
         let output_data = match output.as_slice_memory_order() {
             Some(slice) => Cow::Borrowed(slice),
@@ -516,6 +608,7 @@ impl RecModel {
 
         // CTC decoding
         let mut char_scores = Vec::with_capacity(seq_len.min(32));
+        let mut character_timesteps = Vec::with_capacity(seq_len.min(32));
         let mut text = String::new();
         let mut score_sum = 0.0f32;
         let mut prev_idx = 0usize;
@@ -554,6 +647,7 @@ impl RecModel {
                     text.push(ch);
                     score_sum += score;
                     char_scores.push((ch, score));
+                    character_timesteps.push(t);
                 }
             }
 
@@ -567,13 +661,64 @@ impl RecModel {
             score_sum / char_scores.len() as f32
         };
 
-        Ok(RecognitionResult::new(text, confidence, char_scores))
+        let valid_timestep_count = ((seq_len as f32 * valid_width_ratio.clamp(0.0, 1.0)).ceil()
+            as usize)
+            .clamp(1, seq_len.max(1));
+        let characters =
+            aligned_character_spans(&char_scores, &character_timesteps, valid_timestep_count);
+
+        Ok(AlignedRecognitionResult {
+            text,
+            confidence,
+            char_scores,
+            characters,
+        })
     }
 
     /// Check if character is punctuation
     fn is_punctuation(ch: char) -> bool {
         PUNCTUATIONS.contains(&ch)
     }
+}
+
+fn aligned_character_spans(
+    char_scores: &[(char, f32)],
+    timesteps: &[usize],
+    valid_timestep_count: usize,
+) -> Vec<CharacterSpan> {
+    if char_scores.is_empty() || char_scores.len() != timesteps.len() {
+        return Vec::new();
+    }
+
+    let valid_timestep_count = valid_timestep_count.max(1);
+    let denominator = valid_timestep_count as f32;
+    let centers = timesteps
+        .iter()
+        .map(|timestep| (*timestep).min(valid_timestep_count - 1) as f32 + 0.5)
+        .collect::<Vec<_>>();
+
+    char_scores
+        .iter()
+        .enumerate()
+        .map(|(index, &(character, confidence))| {
+            let start = if index == 0 {
+                0.0
+            } else {
+                (centers[index - 1] + centers[index]) * 0.5 / denominator
+            };
+            let end = if index + 1 == centers.len() {
+                1.0
+            } else {
+                (centers[index] + centers[index + 1]) * 0.5 / denominator
+            };
+            CharacterSpan {
+                character,
+                confidence,
+                start: start.clamp(0.0, 1.0),
+                end: end.clamp(0.0, 1.0),
+            }
+        })
+        .collect()
 }
 
 fn region_target_width(text_box: &TextBox, target_height: u32) -> u32 {
@@ -939,6 +1084,26 @@ mod tests {
         assert!(result.text.is_empty());
         assert_eq!(result.confidence, 0.0);
         assert!(!result.is_valid(0.1));
+    }
+
+    #[test]
+    fn ctc_timesteps_partition_the_visual_line_at_character_midpoints() {
+        let scores = vec![('A', 0.9), ('中', 0.8), ('3', 0.95)];
+        let spans = aligned_character_spans(&scores, &[1, 4, 8], 10);
+
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].character, 'A');
+        assert_eq!(spans[0].start, 0.0);
+        assert!((spans[0].end - 0.3).abs() < f32::EPSILON);
+        assert!((spans[1].start - 0.3).abs() < f32::EPSILON);
+        assert!((spans[1].end - 0.65).abs() < f32::EPSILON);
+        assert!((spans[2].start - 0.65).abs() < f32::EPSILON);
+        assert_eq!(spans[2].end, 1.0);
+    }
+
+    #[test]
+    fn ctc_alignment_stays_empty_when_no_characters_are_emitted() {
+        assert!(aligned_character_spans(&[], &[], 12).is_empty());
     }
 
     #[test]
